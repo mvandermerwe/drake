@@ -1,0 +1,55 @@
+package(default_visibility = ["//visibility:private"])
+
+load(
+    "//tools/skylark:drake_cc.bzl",
+    "drake_cc_binary",
+    "drake_cc_library",
+)
+
+drake_cc_library(
+    name = "cartesian_controller",
+    srcs = [
+        "cartesian_controller.cc",
+    ],
+    hdrs = [
+        "cartesian_controller.h",
+    ],
+    deps = [
+        "//common:default_scalars",
+        "//geometry:geometry_ids",
+        "//geometry:scene_graph",
+        "//math:geometric_transform",
+        "//multibody/parsing",
+        "//multibody/plant",
+        "//systems/analysis:simulator",
+        "//systems/analysis:simulator_gflags",
+        "//systems/analysis:simulator_print_stats",
+        "//systems/framework:diagram",
+        "//visualization:visualization_config_functions",
+    ],
+)
+
+drake_cc_binary(
+    name = "wrist",
+    srcs = [
+        "wrist.cc",
+    ],
+    data = [
+        ":assets",
+    ],
+    deps = [
+        ":cartesian_controller",
+        "//common:add_text_logging_gflags",
+        "//common:default_scalars",
+        "//geometry:geometry_ids",
+        "//geometry:scene_graph",
+        "//math:geometric_transform",
+        "//multibody/parsing",
+        "//multibody/plant",
+        "//systems/analysis:simulator",
+        "//systems/analysis:simulator_gflags",
+        "//systems/analysis:simulator_print_stats",
+        "//systems/framework:diagram",
+        "//visualization:visualization_config_functions",
+    ],
+)
