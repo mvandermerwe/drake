@@ -30,10 +30,20 @@ namespace drake {
                     config.contact_model = "hydroelastic";
                     auto [plant, scene_graph] = AddMultibodyPlant(config, &builder);
                     auto parser = multibody::Parser(&plant, &scene_graph);
-                    parser.AddModelsFromUrl("package://drake/examples/pivot/assets/wrist.urdf");
+                    auto wrist_model_instance_index = parser.AddModelsFromUrl(
+                            "package://drake/examples/pivot/assets/wrist.urdf");
                     parser.AddModelsFromUrl("package://drake/examples/pivot/assets/table.urdf");
                     parser.AddModelsFromUrl("package://drake/examples/pivot/assets/pivot.urdf");
                     plant.Finalize();
+
+                    // Add Cartesian space controller.
+                    CartesianController<double> *controller = new CartesianController<double>(&plant,
+                                                                                              wrist_model_instance_index[0],
+                                                                                              "wrist", 100.0, 0.0);
+                    controller->set_name("cartesian_controller");
+                    // builder.AddSystem(std::make_unique<CartesianController<double>>(&plant,
+                    //                                                                wrist_model_instance_index[0],
+                    //                                                               "wrist", 100.0, 0.0));
 
                     // Build visualizer.
                     auto meshcat = std::make_shared<geometry::Meshcat>();

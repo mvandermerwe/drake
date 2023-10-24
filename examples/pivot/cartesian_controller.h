@@ -9,27 +9,31 @@ namespace drake {
 
             template<typename T>
             class CartesianController : public systems::LeafSystem<T> {
-                DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(CartesianController)
 
             public:
                 CartesianController(
-                        const multibody::MultibodyPlant <T> &plant,
-                        const multibody::ModelInstanceIndex &robot_model_instance_index,
+                        const multibody::MultibodyPlant<T> *plant,
+                        const multibody::ModelInstanceIndex robot_model_instance_index,
                         std::string body_name, float kp, float kd
                 );
 
-//                void SetMultibodyContext(const systems::Context <T>,
-//                                         Context <T> *plant_context) const;
-//
-//                void CalcOutputForce(const systems::Context <T>, BasicVector <T> *output) const;
-
             private:
-                const multibody::MultibodyPlant <T> &plant_;
+
+                void SetMultibodyContext(const systems::Context<T> &, systems::Context<T> *) const;
+
+                void CalcOutputForce(const systems::Context<T> &, systems::BasicVector<T> *) const;
+
+                const multibody::MultibodyPlant<T> *plant_;
                 const multibody::ModelInstanceIndex &robot_model_instance_index_;
                 float kp_;
                 float kd_;
                 int q_dim_;
                 int v_dim_;
+                systems::InputPort<T> &desired_state_port_;
+                systems::InputPort<T> &estimated_state_port_;
+                systems::CacheIndex plant_context_cache_index_;
+                systems::OutputPort<T> &control_output_port_;
+                multibody::Body<T> &ee_body_;
             };
 
         }

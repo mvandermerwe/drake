@@ -94,7 +94,8 @@ void DoScalarDependentDefinitions(py::module m, T) {
     cls  // BR
         .def("contact_surface", &Class::contact_surface,
             cls_doc.contact_surface.doc)
-        .def("F_Ac_W", &Class::F_Ac_W, cls_doc.F_Ac_W.doc);
+        .def("F_Ac_W", &Class::F_Ac_W, cls_doc.F_Ac_W.doc)
+        .def("quadrature_point_data", &Class::quadrature_point_data, cls_doc.quadrature_point_data.doc);
     DefCopyAndDeepCopy(&cls);
     AddValueInstantiation<Class>(m);
   }
