@@ -146,6 +146,10 @@ void DefineGeometryOptimization(py::module m) {
         .def("B", &AffineBall::B, py_rvp::reference_internal, cls_doc.B.doc)
         .def("center", &AffineBall::center, py_rvp::reference_internal,
             cls_doc.center.doc)
+        .def_static("MinimumVolumeCircumscribedEllipsoid",
+            &AffineBall::MinimumVolumeCircumscribedEllipsoid, py::arg("points"),
+            py::arg("rank_tol") = 1e-6,
+            cls_doc.MinimumVolumeCircumscribedEllipsoid.doc)
         .def_static("MakeAxisAligned", &AffineBall::MakeAxisAligned,
             py::arg("radius"), py::arg("center"), cls_doc.MakeAxisAligned.doc)
         .def_static("MakeHypersphere", &AffineBall::MakeHypersphere,
@@ -451,6 +455,8 @@ void DefineGeometryOptimization(py::module m) {
             cls_doc.configuration_obstacles.doc)
         .def_readwrite("starting_ellipse", &IrisOptions::starting_ellipse,
             cls_doc.starting_ellipse.doc)
+        .def_readwrite("bounding_region", &IrisOptions::bounding_region,
+            cls_doc.bounding_region.doc)
         .def_readwrite("num_additional_constraint_infeasible_samples",
             &IrisOptions::num_additional_constraint_infeasible_samples,
             cls_doc.num_additional_constraint_infeasible_samples.doc)
@@ -779,37 +785,6 @@ void DefineGeometryOptimization(py::module m) {
             &GraphOfConvexSets::SolveConvexRestriction, py::arg("active_edges"),
             py::arg("options") = GraphOfConvexSetsOptions(),
             cls_doc.SolveConvexRestriction.doc);
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-    graph_of_convex_sets
-        .def("AddEdge",
-            WrapDeprecated(cls_doc.AddEdge.doc_deprecated,
-                py::overload_cast<GraphOfConvexSets::VertexId,
-                    GraphOfConvexSets::VertexId, std::string>(
-                    &GraphOfConvexSets::AddEdge)),
-            py::arg("u_id"), py::arg("v_id"), py::arg("name") = "",
-            py_rvp::reference_internal, cls_doc.AddEdge.doc_deprecated)
-        .def("RemoveVertex",
-            WrapDeprecated(cls_doc.RemoveVertex.doc_deprecated,
-                py::overload_cast<GraphOfConvexSets::VertexId>(
-                    &GraphOfConvexSets::RemoveVertex)),
-            py::arg("vertex_id"), cls_doc.RemoveVertex.doc_deprecated)
-        .def("RemoveEdge",
-            WrapDeprecated(cls_doc.RemoveEdge.doc_deprecated,
-                py::overload_cast<GraphOfConvexSets::EdgeId>(
-                    &GraphOfConvexSets::RemoveEdge)),
-            py::arg("edge_id"), cls_doc.RemoveEdge.doc_deprecated)
-        .def("SolveShortestPath",
-            WrapDeprecated(cls_doc.SolveShortestPath.doc_deprecated,
-                overload_cast_explicit<solvers::MathematicalProgramResult,
-                    GraphOfConvexSets::VertexId, GraphOfConvexSets::VertexId,
-                    const GraphOfConvexSetsOptions&>(
-                    &GraphOfConvexSets::SolveShortestPath)),
-            py::arg("source_id"), py::arg("target_id"),
-            py::arg("options") = GraphOfConvexSetsOptions(),
-            cls_doc.SolveShortestPath.doc_deprecated);
-#pragma GCC diagnostic pop
   }
   {
     // Definitions for c_iris_collision_geometry.h/cc

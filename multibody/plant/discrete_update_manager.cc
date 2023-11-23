@@ -108,6 +108,14 @@ void DiscreteUpdateManager<T>::DeclareCacheEntries() {
   cache_indexes_.discrete_update_multibody_forces =
       multibody_forces_cache_entry.cache_index();
 
+  const auto& actuation_cache_entry = DeclareCacheEntry(
+      "Discrete update actuation",
+      systems::ValueProducer(this, VectorX<T>(plant().num_actuated_dofs()),
+                             &DiscreteUpdateManager<T>::CalcActuation),
+      {systems::System<T>::xd_ticket(),
+       systems::System<T>::all_parameters_ticket()});
+  cache_indexes_.actuation = actuation_cache_entry.cache_index();
+
   const auto& contact_results_cache_entry = DeclareCacheEntry(
       "Contact results (discrete)",
       systems::ValueProducer(this,
@@ -525,7 +533,10 @@ void DiscreteUpdateManager<T>::AppendContactResultsForPointContact(
 
   for (int icontact = 0; icontact < num_point_contacts; ++icontact) {
     const auto& discrete_pair = discrete_pairs[icontact];
-    const auto& point_pair = point_pairs[icontact];
+
+    DRAKE_DEMAND(discrete_pair.point_pair_index.has_value());
+    const auto& point_pair =
+        point_pairs[discrete_pair.point_pair_index.value()];
 
     const GeometryId geometryA_id = discrete_pair.id_A;
     const GeometryId geometryB_id = discrete_pair.id_B;
@@ -633,6 +644,7 @@ void DiscreteUpdateManager<T>::CalcHydroelasticContactInfo(
     // frame.
     const Vector3<T> f_Aq_W = -(R_WC * f_Bq_C);
 
+    DRAKE_DEMAND(pair.surface_index.has_value());
     const int surface_index = pair.surface_index.value();
     const auto& s = all_surfaces[surface_index];
     // Surface's centroid point O.
@@ -656,6 +668,7 @@ void DiscreteUpdateManager<T>::CalcHydroelasticContactInfo(
 
     // Traction vector applied to body A at point Aq (Aq and Bq are coincident)
     // expressed in the world frame.
+    DRAKE_DEMAND(pair.face_index.has_value());
     const int face_index = pair.face_index.value();
     const Vector3<T> traction_Aq_W = f_Aq_W / s.area(face_index);
 
@@ -733,6 +746,15 @@ void DiscreteUpdateManager<T>::CalcDiscreteUpdateMultibodyForces(
   DRAKE_DEMAND(forces != nullptr);
   DRAKE_DEMAND(forces->CheckHasRightSizeForModel(plant()));
   DoCalcDiscreteUpdateMultibodyForces(context, forces);
+}
+
+template <typename T>
+void DiscreteUpdateManager<T>::CalcActuation(const systems::Context<T>& context,
+                                             VectorX<T>* actuation) const {
+  plant().ValidateContext(context);
+  DRAKE_DEMAND(actuation != nullptr);
+  DRAKE_DEMAND(actuation->size() == plant().num_actuated_dofs());
+  DoCalcActuation(context, actuation);
 }
 
 template <typename T>
@@ -833,10 +855,11 @@ void DiscreteUpdateManager<T>::AppendContactKinematics(
 
     // Tree A contribution to contact Jacobian Jv_W_AcBc_C.
     if (treeA_has_dofs) {
-      Matrix3X<T> J = R_WC.matrix().transpose() *
-                      Jv_AcBc_W.middleCols(
-                          tree_topology().tree_velocities_start(treeA_index),
-                          tree_topology().num_tree_velocities(treeA_index));
+      Matrix3X<T> J =
+          R_WC.matrix().transpose() *
+          Jv_AcBc_W.middleCols(
+              tree_topology().tree_velocities_start_in_v(treeA_index),
+              tree_topology().num_tree_velocities(treeA_index));
       jacobian_blocks.emplace_back(treeA_index, MatrixBlock<T>(std::move(J)));
     }
 
@@ -844,10 +867,11 @@ void DiscreteUpdateManager<T>::AppendContactKinematics(
     // This contribution must be added only if B is different from A.
     if ((treeB_has_dofs && !treeA_has_dofs) ||
         (treeB_has_dofs && treeB_index != treeA_index)) {
-      Matrix3X<T> J = R_WC.matrix().transpose() *
-                      Jv_AcBc_W.middleCols(
-                          tree_topology().tree_velocities_start(treeB_index),
-                          tree_topology().num_tree_velocities(treeB_index));
+      Matrix3X<T> J =
+          R_WC.matrix().transpose() *
+          Jv_AcBc_W.middleCols(
+              tree_topology().tree_velocities_start_in_v(treeB_index),
+              tree_topology().num_tree_velocities(treeB_index));
       jacobian_blocks.emplace_back(treeB_index, MatrixBlock<T>(std::move(J)));
     }
 
@@ -963,7 +987,9 @@ void DiscreteUpdateManager<T>::AppendDiscreteContactPairsForPointContact(
   // Fill in the point contact pairs.
   const std::vector<PenetrationAsPointPair<T>>& point_pairs =
       plant().EvalPointPairPenetrations(context);
-  for (const PenetrationAsPointPair<T>& pair : point_pairs) {
+  for (int point_pair_index = 0; point_pair_index < ssize(point_pairs);
+       ++point_pair_index) {
+    const PenetrationAsPointPair<T>& pair = point_pairs[point_pair_index];
     const BodyIndex body_A_index = geometry_id_to_body_index().at(pair.id_A);
     const Body<T>& body_A = plant().get_body(body_A_index);
     const BodyIndex body_B_index = geometry_id_to_body_index().at(pair.id_B);
@@ -1024,7 +1050,8 @@ void DiscreteUpdateManager<T>::AppendDiscreteContactPairsForPointContact(
                                  tau,
                                  mu,
                                  {} /* no surface index */,
-                                 {} /* no face index */});
+                                 {} /* no face index */,
+                                 point_pair_index});
     }
   }
 }
@@ -1187,9 +1214,20 @@ void DiscreteUpdateManager<T>::AppendDiscreteContactPairsForHydroelasticContact(
           const T phi0 = -p0 / g;
 
           if (k > 0) {
-            contact_pairs.AppendHydroData(DiscreteContactPair<T>{
-                s.id_M(), s.id_N(), p_WQ, nhat_W, phi0, fn0, k, d, tau, mu,
-                surface_index, face});
+            contact_pairs.AppendHydroData(
+                DiscreteContactPair<T>{s.id_M(),
+                                       s.id_N(),
+                                       p_WQ,
+                                       nhat_W,
+                                       phi0,
+                                       fn0,
+                                       k,
+                                       d,
+                                       tau,
+                                       mu,
+                                       surface_index,
+                                       face,
+                                       {} /* no point pair index */});
           }
         }
       }
@@ -1204,6 +1242,14 @@ DiscreteUpdateManager<T>::EvalDiscreteUpdateMultibodyForces(
   return plant()
       .get_cache_entry(cache_indexes_.discrete_update_multibody_forces)
       .template Eval<MultibodyForces<T>>(context);
+}
+
+template <typename T>
+const VectorX<T>& DiscreteUpdateManager<T>::EvalActuation(
+    const systems::Context<T>& context) const {
+  return plant()
+      .get_cache_entry(cache_indexes_.actuation)
+      .template Eval<VectorX<T>>(context);
 }
 
 template <typename T>

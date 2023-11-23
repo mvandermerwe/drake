@@ -2,6 +2,7 @@
 
 #include <array>
 #include <limits>
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
@@ -16,6 +17,7 @@
 #include "drake/multibody/fem/fem_model.h"
 #include "drake/multibody/fem/velocity_newmark_scheme.h"
 #include "drake/multibody/plant/contact_properties.h"
+#include "drake/multibody/plant/force_density_field.h"
 #include "drake/multibody/plant/multibody_plant.h"
 #include "drake/systems/framework/context.h"
 
@@ -382,9 +384,10 @@ void DeformableDriver<T>::AppendContactKinematics(
             context, JacobianWrtVariable::kV, rigid_body.body_frame(), frame_W,
             p_WC, frame_W, frame_W, &Jv_v_WBc_W);
         Matrix3X<T> J =
-            R_CW.matrix() * Jv_v_WBc_W.middleCols(
-                                tree_topology.tree_velocities_start(tree_index),
-                                tree_topology.num_tree_velocities(tree_index));
+            R_CW.matrix() *
+            Jv_v_WBc_W.middleCols(
+                tree_topology.tree_velocities_start_in_v(tree_index),
+                tree_topology.num_tree_velocities(tree_index));
         jacobian_blocks.emplace_back(tree_index, MatrixBlock<T>(std::move(J)));
       }
 
@@ -530,9 +533,9 @@ void DeformableDriver<T>::AppendDeformableRigidFixedConstraintKinematics(
             context, JacobianWrtVariable::kV, rigid_body.body_frame(), frame_W,
             Eigen::Map<const Matrix3X<T>>(p_WQs.data(), 3, p_WQs.size() / 3),
             frame_W, frame_W, &Jv_v_WBq);
-        MatrixBlock<T> jacobian_block_B(
-            Jv_v_WBq.middleCols(tree_topology.tree_velocities_start(tree_index),
-                                tree_topology.num_tree_velocities(tree_index)));
+        MatrixBlock<T> jacobian_block_B(Jv_v_WBq.middleCols(
+            tree_topology.tree_velocities_start_in_v(tree_index),
+            tree_topology.num_tree_velocities(tree_index)));
         SapConstraintJacobian<T> J(clique_index_A, std::move(jacobian_block_A),
                                    clique_index_B, std::move(jacobian_block_B));
         result->emplace_back(object_A, std::move(p_WPs), object_B,
@@ -766,7 +769,12 @@ void DeformableDriver<T>::CalcFreeMotionFemSolver(
       nonparticipating_vertices.insert(v);
     }
   }
-  fem_solver->AdvanceOneTimeStep(fem_state, nonparticipating_vertices);
+  /* Collect all external forces affecting this body and store them into the
+   FemPlantData for the associated FEM model. */
+  const fem::FemPlantData<T> plant_data{
+      context, deformable_model_->GetExternalForces(body_id)};
+  fem_solver->AdvanceOneTimeStep(fem_state, plant_data,
+                                 nonparticipating_vertices);
 }
 
 template <typename T>

@@ -13,6 +13,13 @@ package(default_visibility = ["//visibility:public"])
 # licenses([
 #     "TODO",  # MIT OR Apache-2.0
 # ])
+filegroup(
+    name = "license_glob",
+    srcs = glob(
+        ["LICENSE*"],
+        allow_empty = False,
+    ),
+)
 
 rust_proc_macro(
     name = "enum_dispatch",
@@ -75,8 +82,8 @@ rust_proc_macro(
     version = "0.3.12",
     deps = [
         "@crate__once_cell-1.18.0//:once_cell",
-        "@crate__proc-macro2-1.0.67//:proc_macro2",
+        "@crate__proc-macro2-1.0.69//:proc_macro2",
         "@crate__quote-1.0.33//:quote",
-        "@crate__syn-2.0.37//:syn",
+        "@crate__syn-2.0.38//:syn",
     ],
 )

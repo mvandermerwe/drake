@@ -1721,12 +1721,16 @@ GTEST_TEST(MultibodyPlantTest, ReversedWeldError) {
 bool VerifyFeedthroughPorts(const MultibodyPlant<double>& plant) {
   // Create a set of the indices of all ports that can be feedthrough.
   std::set<int> ok_to_feedthrough;
+  ok_to_feedthrough.insert(plant.get_net_actuation_output_port().get_index());
   ok_to_feedthrough.insert(plant.get_reaction_forces_output_port().get_index());
   ok_to_feedthrough.insert(
       plant.get_generalized_acceleration_output_port().get_index());
-  for (ModelInstanceIndex i(0); i < plant.num_model_instances(); ++i)
+  for (ModelInstanceIndex i(0); i < plant.num_model_instances(); ++i) {
     ok_to_feedthrough.insert(
         plant.get_generalized_acceleration_output_port(i).get_index());
+    ok_to_feedthrough.insert(
+        plant.get_net_actuation_output_port(i).get_index());
+  }
   ok_to_feedthrough.insert(
       plant.get_body_spatial_accelerations_output_port().get_index());
   if (plant.is_discrete()) {
@@ -2846,14 +2850,20 @@ TEST_P(KukaArmTest, StateAccess) {
 
   // Modify positions and change xc expected to reflect changes to positions.
   for (int i = 0; i < plant_->num_positions(); ++i) xc_expected[i] *= -1;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
   plant_->GetMutablePositions(context_.get()) =
       xc_expected.head(plant_->num_positions());
+#pragma GCC diagnostic pop
   EXPECT_EQ(plant_->GetPositions(*context_),
             xc_expected.head(plant_->num_positions()));
   EXPECT_EQ(xc, xc_expected);
 
   // SetPositions() should yield the same result.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
   plant_->GetMutablePositions(context_.get()).setZero();
+#pragma GCC diagnostic pop
   plant_->SetPositions(context_.get(),
                        xc_expected.head(plant_->num_positions()));
   EXPECT_EQ(plant_->GetPositions(*context_),
@@ -2862,14 +2872,20 @@ TEST_P(KukaArmTest, StateAccess) {
   // Modify velocities and change xc_expected to reflect changes to velocities.
   for (int i = 0; i < plant_->num_velocities(); ++i)
     xc_expected[i + plant_->num_positions()] *= -1;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
   plant_->GetMutableVelocities(context_.get()) =
       xc_expected.tail(plant_->num_velocities());
+#pragma GCC diagnostic pop
   EXPECT_EQ(plant_->GetVelocities(*context_),
             xc_expected.tail(plant_->num_velocities()));
   EXPECT_EQ(xc, xc_expected);
 
   // SetVelocities() should yield the same result.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
   plant_->GetMutableVelocities(context_.get()).setZero();
+#pragma GCC diagnostic pop
   plant_->SetVelocities(context_.get(),
                         xc_expected.tail(plant_->num_velocities()));
   EXPECT_EQ(plant_->GetVelocities(*context_),
@@ -2879,7 +2895,10 @@ TEST_P(KukaArmTest, StateAccess) {
   // Get a mutable state and modify it.
   // Note: xc above is referencing values stored in the context. Therefore
   // setting the entire state to zero changes the values referenced by xc.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
   plant_->GetMutablePositionsAndVelocities(context_.get()).setZero();
+#pragma GCC diagnostic pop
   EXPECT_EQ(xc, VectorX<double>::Zero(plant_->num_multibody_states()));
   plant_->SetPositionsAndVelocities(context_.get(), xc_expected);
   EXPECT_EQ(xc, xc_expected);
@@ -2943,7 +2962,8 @@ TEST_P(KukaArmTest, InstanceStateAccess) {
   // Set the positions, make sure that they're retrieved successfully, and
   // verify that no other multibody instance positions or velocities are
   // altered.
-  plant_->GetMutablePositionsAndVelocities(context_.get()).setZero();
+  plant_->SetPositionsAndVelocities(
+      context_.get(), VectorXd::Zero(plant_->num_multibody_states()));
   plant_->SetPositions(context_.get(), arm2, q);
   EXPECT_EQ(plant_->GetPositions(*context_, arm2), q);
   EXPECT_EQ(plant_->GetPositions(*context_, arm1).norm(), 0);
@@ -2953,7 +2973,8 @@ TEST_P(KukaArmTest, InstanceStateAccess) {
   // Set the velocities, make sure that they're retrieved successfully, and
   // verify that no other multibody instance positions or velocities are
   // altered.
-  plant_->GetMutablePositionsAndVelocities(context_.get()).setZero();
+  plant_->SetPositionsAndVelocities(
+      context_.get(), VectorXd::Zero(plant_->num_multibody_states()));
   plant_->SetVelocities(context_.get(), arm2, qd);
   EXPECT_EQ(plant_->GetVelocities(*context_, arm2), qd);
   EXPECT_EQ(plant_->GetPositions(*context_, arm1).norm(), 0);
@@ -2963,7 +2984,8 @@ TEST_P(KukaArmTest, InstanceStateAccess) {
   // Set the positions and velocities, make sure that they're retrieved
   // successfully and verify that no other multibody instance positions or
   // velocities are altered.
-  plant_->GetMutablePositionsAndVelocities(context_.get()).setZero();
+  plant_->SetPositionsAndVelocities(
+      context_.get(), VectorXd::Zero(plant_->num_multibody_states()));
   plant_->SetPositionsAndVelocities(context_.get(), arm2, x);
   EXPECT_EQ(plant_->GetPositionsAndVelocities(*context_, arm2), x);
   EXPECT_EQ(plant_->GetPositionsAndVelocities(*context_, arm1).norm(), 0);
@@ -3867,6 +3889,8 @@ GTEST_TEST(MultibodyPlantTests, ConstraintActiveStatus) {
       body_A, Vector3d(1.0, 2.0, 3.0), body_B, Vector3d(4.0, 5.0, 6.0), 2.0);
   MultibodyConstraintId ball_id = plant.AddBallConstraint(
       body_A, Vector3d(-1.0, -2.0, -3.0), body_B, Vector3d(-4.0, -5.0, -6.0));
+  MultibodyConstraintId weld_id = plant.AddWeldConstraint(
+      body_A, RigidTransformd(), body_B, RigidTransformd());
 
   plant.Finalize();
 
@@ -3876,26 +3900,31 @@ GTEST_TEST(MultibodyPlantTests, ConstraintActiveStatus) {
   EXPECT_TRUE(plant.GetConstraintActiveStatus(*context, coupler_id));
   EXPECT_TRUE(plant.GetConstraintActiveStatus(*context, distance_id));
   EXPECT_TRUE(plant.GetConstraintActiveStatus(*context, ball_id));
+  EXPECT_TRUE(plant.GetConstraintActiveStatus(*context, weld_id));
 
   // Set all constraints to inactive.
   plant.SetConstraintActiveStatus(context.get(), coupler_id, false);
   plant.SetConstraintActiveStatus(context.get(), distance_id, false);
   plant.SetConstraintActiveStatus(context.get(), ball_id, false);
+  plant.SetConstraintActiveStatus(context.get(), weld_id, false);
 
   // Verify all constraints are inactive in the context.
   EXPECT_FALSE(plant.GetConstraintActiveStatus(*context, coupler_id));
   EXPECT_FALSE(plant.GetConstraintActiveStatus(*context, distance_id));
   EXPECT_FALSE(plant.GetConstraintActiveStatus(*context, ball_id));
+  EXPECT_FALSE(plant.GetConstraintActiveStatus(*context, weld_id));
 
   // Set all constraints to back to active.
   plant.SetConstraintActiveStatus(context.get(), coupler_id, true);
   plant.SetConstraintActiveStatus(context.get(), distance_id, true);
   plant.SetConstraintActiveStatus(context.get(), ball_id, true);
+  plant.SetConstraintActiveStatus(context.get(), weld_id, true);
 
   // Verify all constraints are active in the context.
   EXPECT_TRUE(plant.GetConstraintActiveStatus(*context, coupler_id));
   EXPECT_TRUE(plant.GetConstraintActiveStatus(*context, distance_id));
   EXPECT_TRUE(plant.GetConstraintActiveStatus(*context, ball_id));
+  EXPECT_TRUE(plant.GetConstraintActiveStatus(*context, weld_id));
 }
 
 GTEST_TEST(MultibodyPlantTests, FixedOffsetFrameFunctions) {

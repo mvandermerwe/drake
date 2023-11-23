@@ -118,10 +118,16 @@ _DRAKE_EXTERNAL_PACKAGE_INSTALLS = ["@%s//:install" % p for p in [
     "conex_internal",
     "drake_visualizer",
     "gflags",
-    "optitrack_driver",
+    "libjpeg_turbo_internal",
 ]] + select({
     "//conditions:default": ["@csdp_internal//:install"],
     "//tools:no_csdp": [],
+}) + select({
+    "//tools:with_clarabel": [
+        "//tools/workspace/crate_universe:install",
+        "@clarabel_cpp_internal//:install",
+    ],
+    "//conditions:default": [],
 }) + select({
     "//tools:with_gurobi": ["@gurobi//:install"],
     "//conditions:default": [],

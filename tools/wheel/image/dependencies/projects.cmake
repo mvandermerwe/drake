@@ -13,12 +13,6 @@ set(zlib_md5 "9d6a627693163bbbf3f26403a3a0b0b1")
 set(zlib_dlname "zlib-${zlib_version}.zip")
 list(APPEND ALL_PROJECTS zlib)
 
-# libjpeg-turbo
-set(libjpeg-turbo_version 2.1.4)
-set(libjpeg-turbo_url "https://github.com/libjpeg-turbo/libjpeg-turbo/archive/refs/tags/${libjpeg-turbo_version}.tar.gz")
-set(libjpeg-turbo_md5 "357dc26a802c34387512a42697846d16")
-list(APPEND ALL_PROJECTS libjpeg-turbo)
-
 # eigen
 if(APPLE)
     # This version mimics homebrew.
@@ -53,9 +47,9 @@ if(APPLE)
 
     # This must match the version in tools/workspace/ipopt_internal_fromsource.
     # The matching is automatically enforced by a linter script.
-    set(ipopt_version 3.14.12)
+    set(ipopt_version 3.14.13)
     set(ipopt_url "https://github.com/coin-or/Ipopt/archive/refs/tags/releases/${ipopt_version}.tar.gz")
-    set(ipopt_md5 "b2bcb362be4c10eccde02829d3025faa")
+    set(ipopt_md5 "536872bc6b3f2c655f308bee8abd78c4")
     set(ipopt_dlname "ipopt-${ipopt_version}.tar.gz")
     list(APPEND ALL_PROJECTS ipopt)
 endif()

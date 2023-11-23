@@ -13,6 +13,13 @@ package(default_visibility = ["//visibility:public"])
 # licenses([
 #     "TODO",  # BSD-3-Clause
 # ])
+filegroup(
+    name = "license_glob",
+    srcs = glob(
+        ["LICENSE*"],
+        allow_empty = False,
+    ),
+)
 
 rust_library(
     name = "amd",
@@ -74,6 +81,6 @@ rust_library(
     }),
     version = "0.2.2",
     deps = [
-        "@crate__num-traits-0.2.16//:num_traits",
+        "@crate__num-traits-0.2.17//:num_traits",
     ],
 )
