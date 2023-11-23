@@ -112,6 +112,8 @@ namespace drake {
                             .def_readwrite("face_index", &Class::face_index, cls_doc.face_index.doc)
                             .def_readwrite("vt_BqAq_W", &Class::vt_BqAq_W, cls_doc.vt_BqAq_W.doc)
                             .def_readwrite("traction_Aq_W", &Class::traction_Aq_W, cls_doc.traction_Aq_W.doc);
+                    DefCopyAndDeepCopy(&cls);
+                    AddValueInstantiation<Class>(m);
                 }
 
                 // ContactResults
