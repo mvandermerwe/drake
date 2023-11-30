@@ -117,6 +117,21 @@ namespace drake {
                     AddValueInstantiation<Class>(m);
                 }
 
+                // DeformableContactInfo
+                {
+                    using Class = DeformableContactInfo<T>;
+                    constexpr auto &cls_doc = doc.DeformableContactInfo;
+                    auto cls = DefineTemplateClassWithDefault<Class>(m, "DeformableContactInfo", param,
+                                                                     cls_doc.doc);
+                    cls
+                            .def("id_A", &Class::id_A, cls_doc.id_A.doc)
+                            .def("id_B", &Class::id_B, cls_doc.id_B.doc)
+                            .def("F_Ac_W", &Class::F_Ac_W, cls_doc.F_Ac_W.doc)
+                            .def("contact_mesh", &Class::contact_mesh, cls_doc.contact_mesh.doc)
+                            .def("contact_point_data", &Class::contact_point_data,
+                                 cls_doc.contact_point_data.doc);
+                }
+
                 // ContactResults
                 {
                     using Class = ContactResults<T>;
@@ -133,6 +148,10 @@ namespace drake {
                                  cls_doc.num_hydroelastic_contacts.doc)
                             .def("hydroelastic_contact_info", &Class::hydroelastic_contact_info,
                                  py::arg("i"), cls_doc.hydroelastic_contact_info.doc)
+                            .def("num_deformable_contacts", &Class::num_deformable_contacts,
+                                 cls_doc.num_deformable_contacts.doc)
+                            .def("deformable_contact_info", &Class::deformable_contact_info, py::arg("i"),
+                                 cls_doc.deformable_contact_info.doc)
                             .def("plant", &Class::plant, py_rvp::reference, cls_doc.plant.doc)
                             .def("SelectHydroelastic", &Class::SelectHydroelastic,
                                  py::arg("selector"), cls_doc.SelectHydroelastic.doc);
@@ -1626,6 +1645,8 @@ py::arg("id"), py::arg("p_WQ"), py::arg("n_W"),
 cls_doc.SetWallBoundaryCondition.doc)
 .def("GetDiscreteStateIndex", &Class::GetDiscreteStateIndex,
 py::arg("id"), cls_doc.GetDiscreteStateIndex.doc)
+.def("AddFixedConstraint", &Class::AddFixedConstraint, py::arg("body_A_id"), py::arg("body_B"),
+py::arg("X_BA"), py::arg("shape"), py::arg("X_BG"), cls_doc.AddFixedConstraint.doc)
 .def("GetReferencePositions", &Class::GetReferencePositions,
 py::arg("id"), py_rvp::reference_internal,
 cls_doc.GetReferencePositions.doc)
