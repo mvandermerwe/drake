@@ -11,6 +11,7 @@
 #include "drake/systems/analysis/region_of_attraction.h"
 #include "drake/systems/analysis/runge_kutta2_integrator.h"
 #include "drake/systems/analysis/runge_kutta3_integrator.h"
+#include "drake/systems/analysis/implicit_euler_integrator.h"
 #include "drake/systems/analysis/simulator.h"
 #include "drake/systems/analysis/simulator_config.h"
 #include "drake/systems/analysis/simulator_config_functions.h"
@@ -206,6 +207,16 @@ PYBIND11_MODULE(analysis, m) {
             py::keep_alive<1, 2>(),
             // Keep alive, reference: `self` keeps `context` alive.
             py::keep_alive<1, 3>(), doc.RungeKutta3Integrator.ctor.doc);
+
+    DefineTemplateClassWithDefault<ImplicitEulerIntegrator<T>, IntegratorBase<T>>(
+        m, "ImplicitEulerIntegrator", GetPyParam<T>(),
+        doc.ImplicitEulerIntegrator.doc)
+        .def(py::init<const System<T>&, Context<T>*>(), py::arg("system"),
+             py::arg("context") = nullptr,
+             // Keep alive, reference: `self` keeps `system` alive.
+             py::keep_alive<1, 2>(),
+             // Keep alive, reference: `self` keeps `context` alive.
+             py::keep_alive<1, 3>(), doc.ImplicitEulerIntegrator.ctor.doc);
 
     // See equivalent note about EventCallback in `framework_py_systems.cc`.
     using MonitorCallback =

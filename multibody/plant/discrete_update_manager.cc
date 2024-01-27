@@ -2,6 +2,7 @@
 
 #include <limits>
 #include <utility>
+#include <iostream>
 
 #include "drake/multibody/plant/contact_properties.h"
 #include "drake/multibody/plant/deformable_driver.h"
@@ -1301,6 +1302,7 @@ void DiscreteUpdateManager<T>::DoCalcDiscreteValues(
   VectorX<T> x_next(plant().num_multibody_states());
   x_next << q_next, v_next;
   updates->set_value(multibody_state_index(), x_next);
+  // std::cout << "(" << context.get_time() << ") x: " << q0[6] << ", x_next: " << x_next[6] << ", v_next: " << x_next[13] << std::endl;
 }
 
 template <typename T>

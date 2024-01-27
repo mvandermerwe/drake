@@ -7,6 +7,7 @@
 #include <set>
 #include <stdexcept>
 #include <vector>
+#include <iostream>
 
 #include "drake/common/drake_throw.h"
 #include "drake/common/ssize.h"

@@ -9,6 +9,7 @@
 #include "drake/multibody/contact_solvers/block_sparse_matrix.h"
 #include "drake/multibody/contact_solvers/sap/contact_problem_graph.h"
 #include "drake/multibody/plant/slicing_and_indexing.h"
+#include <iostream>
 
 namespace drake {
 namespace multibody {
@@ -24,6 +25,7 @@ SapContactProblem<T>::SapContactProblem(const T& time_step,
       v_star_(std::move(v_star)),
       graph_(num_cliques()) {
   DRAKE_THROW_UNLESS(time_step > 0.0);
+  // std::cout << "Time step: " << time_step << std::endl;
   velocities_start_.resize(A_.size(), 0);
   nv_ = 0;
   for (int i = 0; i < ssize(A_); ++i) {

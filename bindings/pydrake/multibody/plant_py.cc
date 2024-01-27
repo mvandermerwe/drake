@@ -533,7 +533,15 @@ namespace drake {
                                         return self->EvalBodySpatialVelocityInWorld(context, body_B);
                                     },
                                     py::arg("context"), py::arg("body"),
-                                    cls_doc.EvalBodySpatialVelocityInWorld.doc);
+                                    cls_doc.EvalBodySpatialVelocityInWorld.doc)
+                            .def(
+                                    "EvalBodySpatialAccelerationInWorld",
+                                    [](const Class *self, const Context <T> &context,
+                                       const Body <T> &body_B) {
+                                        return self->EvalBodySpatialAccelerationInWorld(context, body_B);
+                                    },
+                                    py::arg("context"), py::arg("body"),
+                                    cls_doc.EvalBodySpatialAccelerationInWorld.doc);
                     auto CalcJacobianSpatialVelocity =
                             [](const Class *self, const systems::Context <T> &context,
                                JacobianWrtVariable with_respect_to, const Frame <T> &frame_B,

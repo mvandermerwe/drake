@@ -8,6 +8,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <iostream>
 
 #include "drake/common/unused.h"
 #include "drake/multibody/contact_solvers/contact_configuration.h"
@@ -930,6 +931,7 @@ void SapDriver<T>::CalcSapSolverResults(
   // Solve the reduced DOF locked problem.
   SapSolver<T> sap;
   sap.set_parameters(sap_parameters_);
+  // std::cout << "SAP Rel. Tol.: " << sap_parameters_.rel_tolerance << std::endl;
 
   SapSolverStatus status;
   if (has_locked_dofs) {
