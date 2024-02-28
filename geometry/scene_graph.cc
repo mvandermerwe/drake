@@ -107,8 +107,7 @@ SceneGraph<T>::SceneGraph()
 
 template <typename T>
 template <typename U>
-SceneGraph<T>::SceneGraph(const SceneGraph<U>& other)
-    : SceneGraph() {
+SceneGraph<T>::SceneGraph(const SceneGraph<U>& other) : SceneGraph() {
   model_ = GeometryState<T>(other.model_);
 
   // We need to guarantee that the same source ids map to the same port indices.
@@ -154,8 +153,7 @@ bool SceneGraph<T>::SourceIsRegistered(SourceId id) const {
 }
 
 template <typename T>
-const InputPort<T>& SceneGraph<T>::get_source_pose_port(
-    SourceId id) const {
+const InputPort<T>& SceneGraph<T>::get_source_pose_port(SourceId id) const {
   ThrowUnlessRegistered(id, "Can't acquire pose port for unknown source id: ");
   return this->get_input_port(input_source_ids_.at(id).pose_port);
 }
@@ -383,12 +381,13 @@ void SceneGraph<T>::AssignRole(Context<T>* context, SourceId source_id,
                                GeometryId geometry_id,
                                IllustrationProperties properties,
                                RoleAssign assign) const {
+  // TODO(#20962) We have deleted drake_visualizer. This warning is probably no
+  // longer accurate.
   static const logging::Warn one_time(
       "Due to a bug (see issue #13597), changing the illustration roles or "
-      "properties in the context will not have any apparent effect in, at "
-      "least, the legacy `drake_visualizer` application of days past. Please "
-      "change the illustration role in the model prior to allocating the "
-      "Context.");
+      "properties in the context will not have any apparent effect in "
+      "some viewer applications. Please change the illustration role in the "
+      "model prior to allocating the Context.");
   auto& g_state = mutable_geometry_state(context);
   g_state.AssignRole(source_id, geometry_id, std::move(properties), assign);
 }
@@ -425,7 +424,7 @@ const SceneGraphInspector<T>& SceneGraph<T>::model_inspector() const {
 
 template <typename T>
 CollisionFilterManager SceneGraph<T>::collision_filter_manager() {
-  return model_.collision_filter_manager();;
+  return model_.collision_filter_manager();
 }
 
 template <typename T>
@@ -491,8 +490,7 @@ std::vector<FrameId> SceneGraph<T>::GetDynamicFrames(
 }
 
 template <typename T>
-void SceneGraph<T>::CalcPoseUpdate(const Context<T>& context,
-                                   int*) const {
+void SceneGraph<T>::CalcPoseUpdate(const Context<T>& context, int*) const {
   // TODO(SeanCurtis-TRI): Update this when the cache is available.
   // This method is const and the context is const. Ultimately, this will pull
   // cached entities to do the query work. For now, we have to const cast the
@@ -525,14 +523,12 @@ void SceneGraph<T>::CalcPoseUpdate(const Context<T>& context,
         }
         const auto& poses =
             pose_port.template Eval<FramePoseVector<T>>(context);
-        state.SetFramePoses(
-            source_id, poses, &kinematics_data);
+        state.SetFramePoses(source_id, poses, &kinematics_data);
       }
     }
   }
 
-  state.FinalizePoseUpdate(kinematics_data,
-                           &state.mutable_proximity_engine(),
+  state.FinalizePoseUpdate(kinematics_data, &state.mutable_proximity_engine(),
                            state.GetMutableRenderEngines());
 }
 
@@ -563,8 +559,8 @@ void SceneGraph<T>::CalcConfigurationUpdate(const Context<T>& context,
               state.GetName(source_id), source_id));
         }
         const auto& configs =
-            configuration_port
-                .template Eval<GeometryConfigurationVector<T>>(context);
+            configuration_port.template Eval<GeometryConfigurationVector<T>>(
+                context);
         state.SetGeometryConfiguration(source_id, configs, &kinematics_data);
       }
     }

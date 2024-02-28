@@ -20,6 +20,7 @@
 #include "drake/multibody/contact_solvers/sap/sap_fixed_constraint.h"
 #include "drake/multibody/contact_solvers/sap/sap_friction_cone_constraint.h"
 #include "drake/multibody/contact_solvers/sap/sap_holonomic_constraint.h"
+#include "drake/multibody/contact_solvers/sap/sap_hunt_crossley_constraint.h"
 #include "drake/multibody/contact_solvers/sap/sap_limit_constraint.h"
 #include "drake/multibody/contact_solvers/sap/sap_pd_controller_constraint.h"
 #include "drake/multibody/contact_solvers/sap/sap_solver.h"
@@ -36,6 +37,7 @@ using drake::multibody::contact_solvers::internal::ContactSolverResults;
 using drake::multibody::contact_solvers::internal::ExtractNormal;
 using drake::multibody::contact_solvers::internal::ExtractTangent;
 using drake::multibody::contact_solvers::internal::FixedConstraintKinematics;
+using drake::multibody::contact_solvers::internal::MakeContactConfiguration;
 using drake::multibody::contact_solvers::internal::MatrixBlock;
 using drake::multibody::contact_solvers::internal::SapBallConstraint;
 using drake::multibody::contact_solvers::internal::SapConstraint;
@@ -46,6 +48,8 @@ using drake::multibody::contact_solvers::internal::SapDistanceConstraint;
 using drake::multibody::contact_solvers::internal::SapFixedConstraint;
 using drake::multibody::contact_solvers::internal::SapFrictionConeConstraint;
 using drake::multibody::contact_solvers::internal::SapHolonomicConstraint;
+using drake::multibody::contact_solvers::internal::SapHuntCrossleyApproximation;
+using drake::multibody::contact_solvers::internal::SapHuntCrossleyConstraint;
 using drake::multibody::contact_solvers::internal::SapLimitConstraint;
 using drake::multibody::contact_solvers::internal::SapPdControllerConstraint;
 using drake::multibody::contact_solvers::internal::SapSolver;
@@ -196,6 +200,8 @@ template <typename T>
 std::vector<RotationMatrix<T>> SapDriver<T>::AddContactConstraints(
     const systems::Context<T>& context, SapContactProblem<T>* problem) const {
   DRAKE_DEMAND(problem != nullptr);
+  DRAKE_DEMAND(plant().get_discrete_contact_approximation() !=
+               DiscreteContactApproximation::kTamsi);
 
   // Parameters used by SAP to estimate regularization, see [Castro et al.,
   // 2021].
@@ -209,20 +215,16 @@ std::vector<RotationMatrix<T>> SapDriver<T>::AddContactConstraints(
   // Quick no-op exit.
   if (num_contacts == 0) return std::vector<RotationMatrix<T>>();
 
-  const DiscreteContactData<ContactPairKinematics<T>>& contact_kinematics =
-      manager().EvalContactKinematics(context);
-
   std::vector<RotationMatrix<T>> R_WC;
   R_WC.reserve(num_contacts);
   for (int icontact = 0; icontact < num_contacts; ++icontact) {
-    const auto& discrete_pair = contact_pairs[icontact];
+    const auto& pair = contact_pairs[icontact];
 
-    const T stiffness = discrete_pair.stiffness;
-    const T dissipation_time_scale = discrete_pair.dissipation_time_scale;
-    const T friction = discrete_pair.friction_coefficient;
-    const ContactConfiguration<T>& configuration =
-        contact_kinematics[icontact].configuration;
-    const auto& jacobian_blocks = contact_kinematics[icontact].jacobian;
+    const T stiffness = pair.stiffness;
+    const T dissipation_time_scale = pair.dissipation_time_scale;
+    const T damping = pair.damping;
+    const T friction = pair.friction_coefficient;
+    const auto& jacobian_blocks = pair.jacobian;
 
     // Stiffness equal to infinity is used to indicate a rigid contact. Since
     // SAP is inherently compliant, we must use the "near rigid regime"
@@ -232,23 +234,66 @@ std::vector<RotationMatrix<T>> SapDriver<T>::AddContactConstraints(
     const double beta = (stiffness == std::numeric_limits<double>::infinity())
                             ? 1.0
                             : near_rigid_threshold_;
-    typename SapFrictionConeConstraint<T>::Parameters parameters{
-        friction, stiffness, dissipation_time_scale, beta, sigma};
 
-    // TODO(amcastro-tri): remove this extra copy of R_WC. Contact constraints
-    // store R_WC in their ContactConfiguration.
-    R_WC.push_back(configuration.R_WC);
+    auto make_sap_parameters = [&]() {
+      return typename SapFrictionConeConstraint<T>::Parameters{
+          friction, stiffness, dissipation_time_scale, beta, sigma};
+    };
+
+    auto make_hunt_crossley_parameters = [&]() {
+      const double vs = plant().stiction_tolerance();
+      SapHuntCrossleyApproximation model;
+      switch (plant().get_discrete_contact_approximation()) {
+        case DiscreteContactApproximation::kSimilar:
+          model = SapHuntCrossleyApproximation::kSimilar;
+          break;
+        case DiscreteContactApproximation::kLagged:
+          model = SapHuntCrossleyApproximation::kLagged;
+          break;
+        default:
+          DRAKE_UNREACHABLE();
+      }
+      return typename SapHuntCrossleyConstraint<T>::Parameters{
+          model, friction, stiffness, damping, vs, sigma};
+    };
+
+    R_WC.push_back(pair.R_WC);
+
     if (jacobian_blocks.size() == 1) {
       SapConstraintJacobian<T> J(jacobian_blocks[0].tree,
                                  std::move(jacobian_blocks[0].J));
-      problem->AddConstraint(std::make_unique<SapFrictionConeConstraint<T>>(
-          configuration, std::move(J), std::move(parameters)));
+      if (plant().get_discrete_contact_approximation() ==
+          DiscreteContactApproximation::kSap) {
+        problem->AddConstraint(std::make_unique<SapFrictionConeConstraint<T>>(
+            MakeContactConfiguration(pair), std::move(J),
+            make_sap_parameters()));
+      } else {
+        ContactConfiguration<T> contact_configuration =
+            MakeContactConfiguration(pair);
+        DRAKE_DEMAND(
+            !std::isnan(ExtractDoubleOrThrow(contact_configuration.vn)));
+        DRAKE_DEMAND(
+            !std::isnan(ExtractDoubleOrThrow(contact_configuration.fe)));
+        DRAKE_DEMAND(
+            !std::isnan(ExtractDoubleOrThrow(contact_configuration.phi)));
+        problem->AddConstraint(std::make_unique<SapHuntCrossleyConstraint<T>>(
+            std::move(contact_configuration), std::move(J),
+            make_hunt_crossley_parameters()));
+      }
     } else {
       SapConstraintJacobian<T> J(
           jacobian_blocks[0].tree, std::move(jacobian_blocks[0].J),
           jacobian_blocks[1].tree, std::move(jacobian_blocks[1].J));
-      problem->AddConstraint(std::make_unique<SapFrictionConeConstraint<T>>(
-          configuration, std::move(J), std::move(parameters)));
+      if (plant().get_discrete_contact_approximation() ==
+          DiscreteContactApproximation::kSap) {
+        problem->AddConstraint(std::make_unique<SapFrictionConeConstraint<T>>(
+            MakeContactConfiguration(pair), std::move(J),
+            make_sap_parameters()));
+      } else {
+        problem->AddConstraint(std::make_unique<SapHuntCrossleyConstraint<T>>(
+            MakeContactConfiguration(pair), std::move(J),
+            make_hunt_crossley_parameters()));
+      }
     }
   }
   return R_WC;
@@ -416,8 +461,8 @@ void SapDriver<T>::AddDistanceConstraints(const systems::Context<T>& context,
     // skip this constraint if it is not active.
     if (!constraint_active_status.at(id)) continue;
 
-    const Body<T>& body_A = plant().get_body(spec.body_A);
-    const Body<T>& body_B = plant().get_body(spec.body_B);
+    const RigidBody<T>& body_A = plant().get_body(spec.body_A);
+    const RigidBody<T>& body_B = plant().get_body(spec.body_B);
     DRAKE_DEMAND(body_A.index() != body_B.index());
 
     const math::RigidTransform<T>& X_WA =
@@ -506,8 +551,8 @@ void SapDriver<T>::AddBallConstraints(
     // skip this constraint if it is not active.
     if (!constraint_active_status.at(id)) continue;
 
-    const Body<T>& body_A = plant().get_body(spec.body_A);
-    const Body<T>& body_B = plant().get_body(spec.body_B);
+    const RigidBody<T>& body_A = plant().get_body(spec.body_A);
+    const RigidBody<T>& body_B = plant().get_body(spec.body_B);
 
     const math::RigidTransform<T>& X_WA =
         plant().EvalBodyPoseInWorld(context, body_A);
@@ -601,8 +646,8 @@ void SapDriver<T>::AddWeldConstraints(
     // skip this constraint if it is not active.
     if (!constraint_active_status.at(id)) continue;
 
-    const Body<T>& body_A = plant().get_body(spec.body_A);
-    const Body<T>& body_B = plant().get_body(spec.body_B);
+    const RigidBody<T>& body_A = plant().get_body(spec.body_A);
+    const RigidBody<T>& body_B = plant().get_body(spec.body_B);
 
     const math::RigidTransform<T>& X_WA = body_A.EvalPoseInWorld(context);
     const math::RigidTransform<T>& X_WB = body_B.EvalPoseInWorld(context);
@@ -629,8 +674,9 @@ void SapDriver<T>::AddWeldConstraints(
 
     // TODO(joemasterjohn) consolidate make_jacobian for use by other
     // constraints that need the same jacobian computed here.
-    auto make_constraint_jacobian = [this, &J_W_AmBm](const Body<T>& bodyA,
-                                                      const Body<T>& bodyB) {
+    auto make_constraint_jacobian = [this, &J_W_AmBm](
+                                        const RigidBody<T>& bodyA,
+                                        const RigidBody<T>& bodyB) {
       const TreeIndex treeA_index =
           tree_topology().body_to_tree_index(bodyA.index());
       const TreeIndex treeB_index =
@@ -976,9 +1022,9 @@ void SapDriver<T>::CalcContactSolverResults(
     const systems::Context<T>& context,
     contact_solvers::internal::ContactSolverResults<T>* results) const {
   const SapSolverResults<T>& sap_results = EvalSapSolverResults(context);
-  const DiscreteContactData<DiscreteContactPair<T>>& discrete_pairs =
+  const DiscreteContactData<DiscreteContactPair<T>>& contact_pairs =
       manager().EvalDiscreteContactPairs(context);
-  const int num_contacts = discrete_pairs.size();
+  const int num_contacts = contact_pairs.size();
   const ContactProblemCache<T>& contact_problem_cache =
       EvalContactProblemCache(context);
   PackContactSolverResults(context, *contact_problem_cache.sap_problem,
@@ -1039,11 +1085,11 @@ void SapDriver<T>::CalcDiscreteUpdateMultibodyForces(
 
   // N.B. The CompliantContactManager indexes constraints objects with body
   // indexes. Therefore using body indices on constraint_spatial_forces is
-  // correct. However MultibodyForce uses BodyNodeIndex, see below.
+  // correct. However MultibodyForce uses MobodIndex, see below.
   for (BodyIndex b(0); b < plant().num_bodies(); ++b) {
-    // MultibodyForce indexes spatial body forces by BodyNodeIndex.
-    const BodyNodeIndex node_index = plant().get_body(b).node_index();
-    spatial_forces[node_index] += constraint_spatial_forces[b];
+    // MultibodyForce indexes spatial body forces by MobodIndex.
+    const MobodIndex mobod_index = plant().get_body(b).mobod_index();
+    spatial_forces[mobod_index] += constraint_spatial_forces[b];
   }
 }
 

@@ -20,6 +20,7 @@ namespace drake {
 namespace systems {
 namespace sensors {
 namespace internal {
+namespace kcov339_avoidance_magic {
 namespace {
 
 // We need drake:: because there's also a systems::lcm namespace.
@@ -108,13 +109,14 @@ class SimRgbdSensorTest : public ::testing::Test {
 
   /* Test helper for determining whether specifying an image port produces the
    expected connections. */
-  void AssertPublishedPorts(bool rgb, bool depth) {
+  void AssertPublishedPorts(bool rgb, bool depth, bool label) {
     auto [sensor, rgbd] = MakeSensorOrThrow();
     const size_t old_system_count = builder_.GetSystems().size();
     AddSimRgbdSensorLcmPublisher(
         sensor, rgb ? &rgbd->color_image_output_port() : nullptr,
-        depth ? &rgbd->depth_image_16U_output_port() : nullptr, false,
-        &builder_, &lcm_);
+        depth ? &rgbd->depth_image_16U_output_port() : nullptr,
+        label ? &rgbd->label_image_output_port() : nullptr, false, &builder_,
+        &lcm_);
     EXPECT_LT(old_system_count, builder_.GetSystems().size());
 
     const auto* images = GetSystem<ImageToLcmImageArrayT>(
@@ -129,6 +131,11 @@ class SimRgbdSensorTest : public ::testing::Test {
       EXPECT_NO_THROW(images->GetInputPort("depth"));
     } else {
       EXPECT_THROW(images->GetInputPort("depth"), std::exception);
+    }
+    if (label) {
+      EXPECT_NO_THROW(images->GetInputPort("label"));
+    } else {
+      EXPECT_THROW(images->GetInputPort("label"), std::exception);
     }
   }
 
@@ -256,27 +263,32 @@ TEST_F(SimRgbdSensorTest, AddSensorForRgbdSensorConfiguration) {
 TEST_F(SimRgbdSensorTest, AddPublisherNoPortIsNoOp) {
   const size_t old_system_count = builder_.GetSystems().size();
   SimRgbdSensor sensor = MakeSensorSpec();
-  AddSimRgbdSensorLcmPublisher(sensor, nullptr, nullptr, false, &builder_,
-                               &lcm_);
+  AddSimRgbdSensorLcmPublisher(sensor, nullptr, nullptr, nullptr, false,
+                               &builder_, &lcm_);
   EXPECT_EQ(old_system_count, builder_.GetSystems().size());
 }
 
 /* Confirms that if only the rgb port is provided, only the rgb port is
  connected. */
 TEST_F(SimRgbdSensorTest, AddPublisherRgbOnly) {
-  AssertPublishedPorts(true /* rgb */, false /* depth */);
+  AssertPublishedPorts(true /* rgb */, false /* depth */, false /* label */);
 }
 
 /* Confirms that if only the depth port is provided, only the depth port is
  connected. */
 TEST_F(SimRgbdSensorTest, AddPublisherDepthOnly) {
-  AssertPublishedPorts(false /* rgb */, true /* depth */);
+  AssertPublishedPorts(false /* rgb */, true /* depth */, false /* label */);
 }
 
-/* Confirms that if only the depth port is provided, only the depth port is
+/* Confirms that if only the label port is provided, only the label port is
  connected. */
-TEST_F(SimRgbdSensorTest, AddPublisherRgbAndDepth) {
-  AssertPublishedPorts(true /* rgb */, true /* depth */);
+TEST_F(SimRgbdSensorTest, AddPublisherLabelOnly) {
+  AssertPublishedPorts(false /* rgb */, false /* depth */, true /* label */);
+}
+
+/* Confirms that if all the ports are provided, all should be connected. */
+TEST_F(SimRgbdSensorTest, AddPublisherRgbDepthAndLabel) {
+  AssertPublishedPorts(true /* rgb */, true /* depth */, true /* label */);
 }
 
 /* Confirms that publisher is configured properly (channel name and period). We
@@ -286,7 +298,8 @@ TEST_F(SimRgbdSensorTest, AddPublisherTestProperties) {
   const auto [sensor, rgbd] = MakeSensorOrThrow();
   const size_t old_system_count = builder_.GetSystems().size();
   AddSimRgbdSensorLcmPublisher(sensor, &rgbd->color_image_output_port(),
-                               &rgbd->depth_image_16U_output_port(), false,
+                               &rgbd->depth_image_16U_output_port(),
+                               &rgbd->label_image_output_port(), false,
                                &builder_, &lcm_);
   EXPECT_LT(old_system_count, builder_.GetSystems().size());
 
@@ -300,6 +313,7 @@ TEST_F(SimRgbdSensorTest, AddPublisherTestProperties) {
 }
 
 }  // namespace
+}  // namespace kcov339_avoidance_magic
 }  // namespace internal
 }  // namespace sensors
 }  // namespace systems

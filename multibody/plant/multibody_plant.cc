@@ -12,7 +12,6 @@
 #include "drake/common/drake_throw.h"
 #include "drake/common/ssize.h"
 #include "drake/common/text_logging.h"
-#include "drake/common/unused.h"
 #include "drake/geometry/geometry_frame.h"
 #include "drake/geometry/geometry_instance.h"
 #include "drake/geometry/geometry_roles.h"
@@ -296,8 +295,20 @@ MultibodyPlant<T>::MultibodyPlant(double time_step)
   DRAKE_DEMAND(contact_model_ == ContactModel::kHydroelasticWithFallback);
   DRAKE_DEMAND(MultibodyPlantConfig{}.contact_model ==
                "hydroelastic_with_fallback");
-  DRAKE_DEMAND(contact_solver_enum_ == DiscreteContactSolver::kTamsi);
-  DRAKE_DEMAND(MultibodyPlantConfig{}.discrete_contact_solver == "tamsi");
+  // By default, MultibodyPlantConfig::discrete_contact_approximation and
+  // MultibodyPlantConfig::discrete_contact_solver are empty, indicating that
+  // TAMSI is the default approximation and solver.
+  // TODO(amcastro-tri): Along the removal of
+  // MultibodyPlant::set_discrete_contact_solver() on or after 2024-04-01,
+  // the code below should be updated to:
+  //   DRAKE_DEMAND(MultibodyPlantConfig{}.discrete_contact_approximation ==
+  //     "[approximation]");
+  // with [approximation] the name of the default contact approximation
+  // consistent with MultibodyPlantConfig.
+  DRAKE_DEMAND(discrete_contact_approximation_ ==
+               DiscreteContactApproximation::kTamsi);
+  DRAKE_DEMAND(MultibodyPlantConfig{}.discrete_contact_solver == "");
+  DRAKE_DEMAND(MultibodyPlantConfig{}.discrete_contact_approximation == "");
 }
 
 template <typename T>
@@ -359,7 +370,7 @@ MultibodyPlant<T>::MultibodyPlant(const MultibodyPlant<U>& other)
     collision_geometries_ = other.collision_geometries_;
     num_collision_geometries_ = other.num_collision_geometries_;
     contact_model_ = other.contact_model_;
-    contact_solver_enum_ = other.contact_solver_enum_;
+    discrete_contact_approximation_ = other.discrete_contact_approximation_;
     sap_near_rigid_threshold_ = other.sap_near_rigid_threshold_;
     contact_surface_representation_ = other.contact_surface_representation_;
     // geometry_query_port_ is set during DeclareSceneGraphPorts() below.
@@ -471,11 +482,12 @@ MultibodyConstraintId MultibodyPlant<T>::AddCouplerConstraint(
 
   // TAMSI does not support coupler constraints. For all other solvers, we let
   // the discrete update manager to throw an exception at finalize time.
-  if (contact_solver_enum_ == DiscreteContactSolver::kTamsi) {
+  if (get_discrete_contact_solver() == DiscreteContactSolver::kTamsi) {
     throw std::runtime_error(
         "Currently this MultibodyPlant is set to use the TAMSI solver. TAMSI "
         "does not support coupler constraints. Use "
-        "set_discrete_contact_solver() to set a different solver type.");
+        "set_discrete_contact_approximation() to set a model approximation "
+        "that uses the SAP solver instead (kSap, kSimilar, or kLagged).");
   }
 
   if (joint0.num_velocities() != 1 || joint1.num_velocities() != 1) {
@@ -499,9 +511,9 @@ MultibodyConstraintId MultibodyPlant<T>::AddCouplerConstraint(
 
 template <typename T>
 MultibodyConstraintId MultibodyPlant<T>::AddDistanceConstraint(
-    const Body<T>& body_A, const Vector3<double>& p_AP, const Body<T>& body_B,
-    const Vector3<double>& p_BQ, double distance, double stiffness,
-    double damping) {
+    const RigidBody<T>& body_A, const Vector3<double>& p_AP,
+    const RigidBody<T>& body_B, const Vector3<double>& p_BQ, double distance,
+    double stiffness, double damping) {
   // N.B. The manager is setup at Finalize() and therefore we must require
   // constraints to be added pre-finalize.
   DRAKE_MBP_THROW_IF_FINALIZED();
@@ -514,13 +526,12 @@ MultibodyConstraintId MultibodyPlant<T>::AddDistanceConstraint(
 
   // TAMSI does not support distance constraints. For all other solvers, we let
   // the discrete update manager throw an exception at finalize time.
-  if (contact_solver_enum_ == DiscreteContactSolver::kTamsi) {
+  if (get_discrete_contact_solver() == DiscreteContactSolver::kTamsi) {
     throw std::runtime_error(
         "Currently this MultibodyPlant is set to use the TAMSI solver. TAMSI "
         "does not support distance constraints. Use "
-        "set_discrete_contact_solver(DiscreteContactSolver::kSap) to use the "
-        "SAP solver instead. For other solvers, refer to "
-        "DiscreteContactSolver.");
+        "set_discrete_contact_approximation() to set a model approximation "
+        "that uses the SAP solver instead (kSap, kSimilar, or kLagged).");
   }
 
   const MultibodyConstraintId constraint_id =
@@ -544,8 +555,8 @@ MultibodyConstraintId MultibodyPlant<T>::AddDistanceConstraint(
 
 template <typename T>
 MultibodyConstraintId MultibodyPlant<T>::AddBallConstraint(
-    const Body<T>& body_A, const Vector3<double>& p_AP, const Body<T>& body_B,
-    const Vector3<double>& p_BQ) {
+    const RigidBody<T>& body_A, const Vector3<double>& p_AP,
+    const RigidBody<T>& body_B, const Vector3<double>& p_BQ) {
   // N.B. The manager is set up at Finalize() and therefore we must require
   // constraints to be added pre-finalize.
   DRAKE_MBP_THROW_IF_FINALIZED();
@@ -558,13 +569,12 @@ MultibodyConstraintId MultibodyPlant<T>::AddBallConstraint(
 
   // TAMSI does not support ball constraints. For all other solvers, we let
   // the discrete update manager throw an exception at finalize time.
-  if (contact_solver_enum_ == DiscreteContactSolver::kTamsi) {
+  if (get_discrete_contact_solver() == DiscreteContactSolver::kTamsi) {
     throw std::runtime_error(
         "Currently this MultibodyPlant is set to use the TAMSI solver. TAMSI "
         "does not support ball constraints. Use "
-        "set_discrete_contact_solver(DiscreteContactSolver::kSap) to use the "
-        "SAP solver instead. For other solvers, refer to "
-        "DiscreteContactSolver.");
+        "set_discrete_contact_approximation() to set a model approximation "
+        "that uses the SAP solver instead (kSap, kSimilar, or kLagged).");
   }
 
   const MultibodyConstraintId constraint_id =
@@ -588,8 +598,8 @@ MultibodyConstraintId MultibodyPlant<T>::AddBallConstraint(
 
 template <typename T>
 MultibodyConstraintId MultibodyPlant<T>::AddWeldConstraint(
-    const Body<T>& body_A, const math::RigidTransform<double>& X_AP,
-    const Body<T>& body_B, const math::RigidTransform<double>& X_BQ) {
+    const RigidBody<T>& body_A, const math::RigidTransform<double>& X_AP,
+    const RigidBody<T>& body_B, const math::RigidTransform<double>& X_BQ) {
   // N.B. The manager is set up at Finalize() and therefore we must require
   // constraints to be added pre-finalize.
   DRAKE_MBP_THROW_IF_FINALIZED();
@@ -602,13 +612,12 @@ MultibodyConstraintId MultibodyPlant<T>::AddWeldConstraint(
 
   // TAMSI does not support weld constraints. For all other solvers, we let
   // the discrete update manager throw an exception at finalize time.
-  if (contact_solver_enum_ == DiscreteContactSolver::kTamsi) {
+  if (get_discrete_contact_solver() == DiscreteContactSolver::kTamsi) {
     throw std::runtime_error(
         "Currently this MultibodyPlant is set to use the TAMSI solver. TAMSI "
         "does not support weld constraints. Use "
-        "set_discrete_contact_solver(DiscreteContactSolver::kSap) to use the "
-        "SAP solver instead. For other solvers, refer to "
-        "DiscreteContactSolver.");
+        "set_discrete_contact_approximation() to set a model approximation "
+        "that uses the SAP solver instead (kSap, kSimilar, or kLagged).");
   }
 
   const MultibodyConstraintId constraint_id =
@@ -631,6 +640,26 @@ MultibodyConstraintId MultibodyPlant<T>::AddWeldConstraint(
 }
 
 template <typename T>
+void MultibodyPlant<T>::RemoveConstraint(MultibodyConstraintId id) {
+  // N.B. The manager and parameters are set up at Finalize() and therefore we
+  // must require constraints to be removed pre-finalize.
+  DRAKE_MBP_THROW_IF_FINALIZED();
+
+  int num_removed = 0;
+  num_removed += coupler_constraints_specs_.erase(id);
+  num_removed += distance_constraints_specs_.erase(id);
+  num_removed += ball_constraints_specs_.erase(id);
+  num_removed += weld_constraints_specs_.erase(id);
+  if (num_removed != 1) {
+    throw std::runtime_error(fmt::format(
+        "RemoveConstraint(): The constraint id {} does not match "
+        "any constraint registered with this plant. Note that this method does "
+        "not check constraints registered with DeformableModel.",
+        id));
+  }
+}
+
+template <typename T>
 std::string MultibodyPlant<T>::GetTopologyGraphvizString() const {
   std::string graphviz = "digraph MultibodyPlant {\n";
   graphviz += "label=\"" + this->get_name() + "\";\n";
@@ -645,7 +674,7 @@ std::string MultibodyPlant<T>::GetTopologyGraphvizString() const {
     graphviz += fmt::format(" label=\"{}\";\n",
                             GetModelInstanceName(model_instance_index));
     for (const BodyIndex& body_index : GetBodyIndices(model_instance_index)) {
-      const Body<T>& body = get_body(body_index);
+      const RigidBody<T>& body = get_body(body_index);
       graphviz +=
           fmt::format(" body{} [label=\"{}\"];\n", body.index(), body.name());
     }
@@ -673,12 +702,54 @@ template <typename T>
 void MultibodyPlant<T>::set_discrete_contact_solver(
     DiscreteContactSolver contact_solver) {
   DRAKE_MBP_THROW_IF_FINALIZED();
-  contact_solver_enum_ = contact_solver;
+  switch (contact_solver) {
+    case DiscreteContactSolver::kTamsi:
+      if (num_constraints() > 0) {
+        throw std::runtime_error(fmt::format(
+            "You selected TAMSI as the solver, but you have constraints "
+            "registered with this model (num_constraints() == {}). TAMSI does "
+            "not support constraints.",
+            num_constraints()));
+      }
+      discrete_contact_approximation_ = DiscreteContactApproximation::kTamsi;
+      break;
+    case DiscreteContactSolver::kSap:
+      discrete_contact_approximation_ = DiscreteContactApproximation::kSap;
+      break;
+  }
 }
 
 template <typename T>
 DiscreteContactSolver MultibodyPlant<T>::get_discrete_contact_solver() const {
-  return contact_solver_enum_;
+  // Only the TAMSI approximation uses the TAMSI solver.
+  if (discrete_contact_approximation_ == DiscreteContactApproximation::kTamsi)
+    return DiscreteContactSolver::kTamsi;
+  // All other approximations use the SAP solver.
+  return DiscreteContactSolver::kSap;
+}
+
+template <typename T>
+void MultibodyPlant<T>::set_discrete_contact_approximation(
+    DiscreteContactApproximation approximation) {
+  DRAKE_MBP_THROW_IF_FINALIZED();
+  DRAKE_THROW_UNLESS(is_discrete());
+
+  if (approximation == DiscreteContactApproximation::kTamsi &&
+      num_constraints() > 0) {
+    throw std::runtime_error(fmt::format(
+        "You selected TAMSI as the contact approximation, but you have "
+        "constraints registered with this model (num_constraints() == {}). "
+        "TAMSI does not support constraints.",
+        num_constraints()));
+  }
+
+  discrete_contact_approximation_ = approximation;
+}
+
+template <typename T>
+DiscreteContactApproximation
+MultibodyPlant<T>::get_discrete_contact_approximation() const {
+  return discrete_contact_approximation_;
 }
 
 template <typename T>
@@ -701,7 +772,7 @@ ContactModel MultibodyPlant<T>::get_contact_model() const {
 
 template <typename T>
 void MultibodyPlant<T>::SetFreeBodyRandomRotationDistributionToUniform(
-    const Body<T>& body) {
+    const RigidBody<T>& body) {
   RandomGenerator generator;
   auto q_FM = math::UniformlyRandomQuaternion<symbolic::Expression>(&generator);
   SetFreeBodyRandomRotationDistribution(body, q_FM);
@@ -752,7 +823,7 @@ geometry::SourceId MultibodyPlant<T>::RegisterAsSourceForSceneGraph(
 
 template <typename T>
 geometry::GeometryId MultibodyPlant<T>::RegisterVisualGeometry(
-    const Body<T>& body, const math::RigidTransform<double>& X_BG,
+    const RigidBody<T>& body, const math::RigidTransform<double>& X_BG,
     const geometry::Shape& shape, const std::string& name) {
   return RegisterVisualGeometry(body, X_BG, shape, name,
                                 geometry::IllustrationProperties());
@@ -760,7 +831,7 @@ geometry::GeometryId MultibodyPlant<T>::RegisterVisualGeometry(
 
 template <typename T>
 geometry::GeometryId MultibodyPlant<T>::RegisterVisualGeometry(
-    const Body<T>& body, const math::RigidTransform<double>& X_BG,
+    const RigidBody<T>& body, const math::RigidTransform<double>& X_BG,
     const geometry::Shape& shape, const std::string& name,
     const Vector4<double>& diffuse_color) {
   return RegisterVisualGeometry(
@@ -770,7 +841,7 @@ geometry::GeometryId MultibodyPlant<T>::RegisterVisualGeometry(
 
 template <typename T>
 geometry::GeometryId MultibodyPlant<T>::RegisterVisualGeometry(
-    const Body<T>& body, const math::RigidTransform<double>& X_BG,
+    const RigidBody<T>& body, const math::RigidTransform<double>& X_BG,
     const geometry::Shape& shape, const std::string& name,
     const geometry::IllustrationProperties& properties) {
   // TODO(SeanCurtis-TRI): Consider simply adding an interface that takes a
@@ -817,13 +888,13 @@ geometry::GeometryId MultibodyPlant<T>::RegisterVisualGeometry(
 
 template <typename T>
 const std::vector<geometry::GeometryId>&
-MultibodyPlant<T>::GetVisualGeometriesForBody(const Body<T>& body) const {
+MultibodyPlant<T>::GetVisualGeometriesForBody(const RigidBody<T>& body) const {
   return visual_geometries_[body.index()];
 }
 
 template <typename T>
 geometry::GeometryId MultibodyPlant<T>::RegisterCollisionGeometry(
-    const Body<T>& body, const math::RigidTransform<double>& X_BG,
+    const RigidBody<T>& body, const math::RigidTransform<double>& X_BG,
     const geometry::Shape& shape, const std::string& name,
     geometry::ProximityProperties properties) {
   DRAKE_MBP_THROW_IF_FINALIZED();
@@ -846,7 +917,7 @@ geometry::GeometryId MultibodyPlant<T>::RegisterCollisionGeometry(
 
 template <typename T>
 geometry::GeometryId MultibodyPlant<T>::RegisterCollisionGeometry(
-    const Body<T>& body, const math::RigidTransform<double>& X_BG,
+    const RigidBody<T>& body, const math::RigidTransform<double>& X_BG,
     const geometry::Shape& shape, const std::string& name,
     const CoulombFriction<double>& coulomb_friction) {
   geometry::ProximityProperties props;
@@ -857,18 +928,19 @@ geometry::GeometryId MultibodyPlant<T>::RegisterCollisionGeometry(
 
 template <typename T>
 const std::vector<geometry::GeometryId>&
-MultibodyPlant<T>::GetCollisionGeometriesForBody(const Body<T>& body) const {
+MultibodyPlant<T>::GetCollisionGeometriesForBody(
+    const RigidBody<T>& body) const {
   DRAKE_ASSERT(body.index() < num_bodies());
   return collision_geometries_[body.index()];
 }
 
 template <typename T>
 geometry::GeometrySet MultibodyPlant<T>::CollectRegisteredGeometries(
-    const std::vector<const Body<T>*>& bodies) const {
+    const std::vector<const RigidBody<T>*>& bodies) const {
   DRAKE_THROW_UNLESS(geometry_source_is_registered());
 
   geometry::GeometrySet geometry_set;
-  for (const Body<T>* body : bodies) {
+  for (const RigidBody<T>* body : bodies) {
     std::optional<FrameId> frame_id = GetBodyFrameIdIfExists(body->index());
     if (frame_id) {
       geometry_set.Add(frame_id.value());
@@ -878,12 +950,12 @@ geometry::GeometrySet MultibodyPlant<T>::CollectRegisteredGeometries(
 }
 
 template <typename T>
-std::vector<const Body<T>*> MultibodyPlant<T>::GetBodiesWeldedTo(
-    const Body<T>& body) const {
+std::vector<const RigidBody<T>*> MultibodyPlant<T>::GetBodiesWeldedTo(
+    const RigidBody<T>& body) const {
   const std::set<BodyIndex> island =
       internal_tree().multibody_graph().FindBodiesWeldedTo(body.index());
   // Map body indices to pointers.
-  std::vector<const Body<T>*> sub_graph_bodies;
+  std::vector<const RigidBody<T>*> sub_graph_bodies;
   for (BodyIndex body_index : island) {
     sub_graph_bodies.push_back(&get_body(body_index));
   }
@@ -912,7 +984,7 @@ std::unordered_set<BodyIndex> MultibodyPlant<T>::GetFloatingBaseBodies() const {
   DRAKE_MBP_THROW_IF_NOT_FINALIZED();
   std::unordered_set<BodyIndex> floating_bodies;
   for (BodyIndex body_index(0); body_index < num_bodies(); ++body_index) {
-    const Body<T>& body = get_body(body_index);
+    const RigidBody<T>& body = get_body(body_index);
     if (body.is_floating()) floating_bodies.insert(body.index());
   }
   return floating_bodies;
@@ -920,7 +992,7 @@ std::unordered_set<BodyIndex> MultibodyPlant<T>::GetFloatingBaseBodies() const {
 
 template <typename T>
 geometry::GeometryId MultibodyPlant<T>::RegisterGeometry(
-    const Body<T>& body, const math::RigidTransform<double>& X_BG,
+    const RigidBody<T>& body, const math::RigidTransform<double>& X_BG,
     const geometry::Shape& shape, const std::string& name) {
   DRAKE_ASSERT(!is_finalized());
   DRAKE_ASSERT(geometry_source_is_registered());
@@ -948,7 +1020,8 @@ void MultibodyPlant<T>::RegisterGeometryFramesForAllBodies() {
 }
 
 template <typename T>
-void MultibodyPlant<T>::RegisterRigidBodyWithSceneGraph(const Body<T>& body) {
+void MultibodyPlant<T>::RegisterRigidBodyWithSceneGraph(
+    const RigidBody<T>& body) {
   if (geometry_source_is_registered()) {
     // If not already done, register a frame for this body.
     if (!body_has_registered_frame(body)) {
@@ -967,7 +1040,7 @@ void MultibodyPlant<T>::RegisterRigidBodyWithSceneGraph(const Body<T>& body) {
 
 template <typename T>
 void MultibodyPlant<T>::SetFreeBodyPoseInWorldFrame(
-    systems::Context<T>* context, const Body<T>& body,
+    systems::Context<T>* context, const RigidBody<T>& body,
     const math::RigidTransform<T>& X_WB) const {
   DRAKE_MBP_THROW_IF_NOT_FINALIZED();
   this->ValidateContext(context);
@@ -976,8 +1049,8 @@ void MultibodyPlant<T>::SetFreeBodyPoseInWorldFrame(
 
 template <typename T>
 void MultibodyPlant<T>::SetFreeBodyPoseInAnchoredFrame(
-    systems::Context<T>* context, const Frame<T>& frame_F, const Body<T>& body,
-    const math::RigidTransform<T>& X_FB) const {
+    systems::Context<T>* context, const Frame<T>& frame_F,
+    const RigidBody<T>& body, const math::RigidTransform<T>& X_FB) const {
   DRAKE_MBP_THROW_IF_NOT_FINALIZED();
   this->ValidateContext(context);
 
@@ -1005,17 +1078,17 @@ void MultibodyPlant<T>::CalcSpatialAccelerationsFromVdot(
   internal_tree().CalcSpatialAccelerationsFromVdot(
       context, internal_tree().EvalPositionKinematics(context),
       internal_tree().EvalVelocityKinematics(context), known_vdot, A_WB_array);
-  // Permute BodyNodeIndex -> BodyIndex.
+  // Permute MobodIndex -> BodyIndex.
   // TODO(eric.cousineau): Remove dynamic allocations. Making this in-place
-  // still required dynamic allocation for recording permutation indices.
-  // Can change implementation once MultibodyTree becomes fully internal.
-  std::vector<SpatialAcceleration<T>> A_WB_array_node = *A_WB_array;
+  //  still required dynamic allocation for recording permutation indices.
+  //  Can change implementation once MultibodyTree becomes fully internal.
+  std::vector<SpatialAcceleration<T>> A_WB_array_mobod = *A_WB_array;
   const internal::MultibodyTreeTopology& topology =
       internal_tree().get_topology();
-  for (internal::BodyNodeIndex node_index(1);
-       node_index < topology.get_num_body_nodes(); ++node_index) {
-    const BodyIndex body_index = topology.get_body_node(node_index).body;
-    (*A_WB_array)[body_index] = A_WB_array_node[node_index];
+  for (internal::MobodIndex mobod_index(1); mobod_index < topology.num_mobods();
+       ++mobod_index) {
+    const BodyIndex body_index = topology.get_body_node(mobod_index).rigid_body;
+    (*A_WB_array)[body_index] = A_WB_array_mobod[mobod_index];
   }
 }
 
@@ -1097,7 +1170,7 @@ void MultibodyPlant<T>::Finalize() {
   // Make the manager of discrete updates.
   if (is_discrete()) {
     std::unique_ptr<internal::DiscreteUpdateManager<T>> manager =
-        internal::MakeDiscreteUpdateManager<T>(contact_solver_enum_);
+        internal::MakeDiscreteUpdateManager<T>(get_discrete_contact_solver());
     if (manager) {
       SetDiscreteUpdateManager(std::move(manager));
     }
@@ -1224,6 +1297,27 @@ MatrixX<T> MultibodyPlant<T>::MakeActuationMatrix() const {
   return B;
 }
 
+template <typename T>
+Eigen::SparseMatrix<double>
+MultibodyPlant<T>::MakeActuationMatrixPseudoinverse() const {
+  // We leverage here the assumption that B (the actuation matrix) is a
+  // permutation matrix, so Bᵀ is the pseudoinverse.
+  std::vector<Eigen::Triplet<double>> triplets;
+  for (JointActuatorIndex actuator_index(0); actuator_index < num_actuators();
+       ++actuator_index) {
+    const JointActuator<T>& actuator = get_joint_actuator(actuator_index);
+    // This method assumes actuators on single dof joints. Assert this
+    // condition.
+    DRAKE_DEMAND(actuator.joint().num_velocities() == 1);
+    triplets.push_back(Eigen::Triplet<double>(
+        int{actuator.index()}, actuator.joint().velocity_start(), 1.0));
+  }
+
+  Eigen::SparseMatrix<double> Bplus(num_actuated_dofs(), num_velocities());
+  Bplus.setFromTriplets(triplets.begin(), triplets.end());
+  return Bplus;
+}
+
 namespace {
 
 void ThrowForDisconnectedGeometryPort(std::string_view explanation) {
@@ -1313,8 +1407,8 @@ void MultibodyPlant<T>::ApplyDefaultCollisionFilters() {
     // or joints in which the parent body is `world`.
     for (JointIndex j{0}; j < num_joints(); ++j) {
       const Joint<T>& joint = get_joint(j);
-      const Body<T>& child = joint.child_body();
-      const Body<T>& parent = joint.parent_body();
+      const RigidBody<T>& child = joint.child_body();
+      const RigidBody<T>& parent = joint.parent_body();
       if (parent.index() == world_index()) continue;
       if (joint.type_name() == QuaternionFloatingJoint<T>::kTypeName) continue;
       std::optional<FrameId> child_id = GetBodyFrameIdIfExists(child.index());
@@ -1337,7 +1431,7 @@ void MultibodyPlant<T>::ApplyDefaultCollisionFilters() {
       continue;
     }
     // Map body indices to pointers.
-    std::vector<const Body<T>*> subgraph_bodies;
+    std::vector<const RigidBody<T>*> subgraph_bodies;
     for (BodyIndex body_index : subgraph) {
       subgraph_bodies.push_back(&get_body(body_index));
     }
@@ -1719,7 +1813,7 @@ void MultibodyPlant<T>::EstimatePointContactParameters(
   // system.
   double mass = 0.0;
   for (BodyIndex body_index(0); body_index < num_bodies(); ++body_index) {
-    const Body<T>& body = get_body(body_index);
+    const RigidBody<T>& body = get_body(body_index);
     mass = std::max(mass, body.default_mass());
   }
 
@@ -1890,10 +1984,10 @@ void MultibodyPlant<T>::AppendContactResultsContinuousPointPair(
     const BodyIndex bodyA_index = FindBodyByGeometryId(geometryA_id);
     const BodyIndex bodyB_index = FindBodyByGeometryId(geometryB_id);
 
-    internal::BodyNodeIndex bodyA_node_index =
-        get_body(bodyA_index).node_index();
-    internal::BodyNodeIndex bodyB_node_index =
-        get_body(bodyB_index).node_index();
+    internal::MobodIndex bodyA_mobod_index =
+        get_body(bodyA_index).mobod_index();
+    internal::MobodIndex bodyB_mobod_index =
+        get_body(bodyB_index).mobod_index();
 
     // Penetration depth, > 0 during pair.
     const T& x = pair.depth;
@@ -1906,18 +2000,18 @@ void MultibodyPlant<T>::AppendContactResultsContinuousPointPair(
     const Vector3<T> p_WC = 0.5 * (p_WCa + p_WCb);
 
     // Contact point position on body A.
-    const Vector3<T>& p_WAo = pc.get_X_WB(bodyA_node_index).translation();
+    const Vector3<T>& p_WAo = pc.get_X_WB(bodyA_mobod_index).translation();
     const Vector3<T>& p_CoAo_W = p_WAo - p_WC;
 
     // Contact point position on body B.
-    const Vector3<T>& p_WBo = pc.get_X_WB(bodyB_node_index).translation();
+    const Vector3<T>& p_WBo = pc.get_X_WB(bodyB_mobod_index).translation();
     const Vector3<T>& p_CoBo_W = p_WBo - p_WC;
 
     // Separation velocity, > 0  if objects separate.
     const Vector3<T> v_WAc =
-        vc.get_V_WB(bodyA_node_index).Shift(-p_CoAo_W).translational();
+        vc.get_V_WB(bodyA_mobod_index).Shift(-p_CoAo_W).translational();
     const Vector3<T> v_WBc =
-        vc.get_V_WB(bodyB_node_index).Shift(-p_CoBo_W).translational();
+        vc.get_V_WB(bodyB_mobod_index).Shift(-p_CoBo_W).translational();
     const Vector3<T> v_AcBc_W = v_WBc - v_WAc;
 
     // if xdot = vn > 0 ==> they are getting closer.
@@ -2003,20 +2097,20 @@ void MultibodyPlant<T>::CalcAndAddContactForcesByPenaltyMethod(
     const BodyIndex bodyA_index = FindBodyByGeometryId(geometryA_id);
     const BodyIndex bodyB_index = FindBodyByGeometryId(geometryB_id);
 
-    internal::BodyNodeIndex bodyA_node_index =
-        get_body(bodyA_index).node_index();
-    internal::BodyNodeIndex bodyB_node_index =
-        get_body(bodyB_index).node_index();
+    const internal::MobodIndex bodyA_mobod_index =
+        get_body(bodyA_index).mobod_index();
+    const internal::MobodIndex bodyB_mobod_index =
+        get_body(bodyB_index).mobod_index();
 
     // Contact point C.
     const Vector3<T> p_WC = contact_info.contact_point();
 
     // Contact point position on body A.
-    const Vector3<T>& p_WAo = pc.get_X_WB(bodyA_node_index).translation();
+    const Vector3<T>& p_WAo = pc.get_X_WB(bodyA_mobod_index).translation();
     const Vector3<T>& p_CoAo_W = p_WAo - p_WC;
 
     // Contact point position on body B.
-    const Vector3<T>& p_WBo = pc.get_X_WB(bodyB_node_index).translation();
+    const Vector3<T>& p_WBo = pc.get_X_WB(bodyB_mobod_index).translation();
     const Vector3<T>& p_CoBo_W = p_WBo - p_WC;
 
     const Vector3<T> f_Bc_W = contact_info.contact_force();
@@ -2025,13 +2119,13 @@ void MultibodyPlant<T>::CalcAndAddContactForcesByPenaltyMethod(
     if (bodyA_index != world_index()) {
       // Spatial force on body A at Ao, expressed in W.
       const SpatialForce<T> F_AAo_W = F_AC_W.Shift(p_CoAo_W);
-      F_BBo_W_array->at(bodyA_node_index) += F_AAo_W;
+      F_BBo_W_array->at(bodyA_mobod_index) += F_AAo_W;
     }
 
     if (bodyB_index != world_index()) {
       // Spatial force on body B at Bo, expressed in W.
       const SpatialForce<T> F_BBo_W = -F_AC_W.Shift(p_CoBo_W);
-      F_BBo_W_array->at(bodyB_node_index) += F_BBo_W;
+      F_BBo_W_array->at(bodyB_mobod_index) += F_BBo_W;
     }
   }
 }
@@ -2109,8 +2203,8 @@ void MultibodyPlant<T>::CalcHydroelasticContactForces(
     // A and B.
     const BodyIndex bodyA_index = FindBodyByGeometryId(geometryM_id);
     const BodyIndex bodyB_index = FindBodyByGeometryId(geometryN_id);
-    const Body<T>& bodyA = get_body(bodyA_index);
-    const Body<T>& bodyB = get_body(bodyB_index);
+    const RigidBody<T>& bodyA = get_body(bodyA_index);
+    const RigidBody<T>& bodyB = get_body(bodyB_index);
 
     // The poses and spatial velocities of bodies A and B.
     const RigidTransform<T>& X_WA = bodyA.EvalPoseInWorld(context);
@@ -2139,11 +2233,11 @@ void MultibodyPlant<T>::CalcHydroelasticContactForces(
         data, F_Ac_W, &F_Ao_W, &F_Bo_W);
 
     if (bodyA_index != world_index()) {
-      F_BBo_W_array.at(bodyA.node_index()) += F_Ao_W;
+      F_BBo_W_array.at(bodyA.mobod_index()) += F_Ao_W;
     }
 
     if (bodyB_index != world_index()) {
-      F_BBo_W_array.at(bodyB.node_index()) += F_Bo_W;
+      F_BBo_W_array.at(bodyB.mobod_index()) += F_Bo_W;
     }
 
     // Add the information for contact reporting.
@@ -2231,8 +2325,8 @@ void MultibodyPlant<T>::AddAppliedExternalSpatialForces(
   for (const auto& force_structure : *applied_input) {
     throw_if_contains_nan(force_structure);
     const BodyIndex body_index = force_structure.body_index;
-    const Body<T>& body = get_body(body_index);
-    const auto body_node_index = body.node_index();
+    const RigidBody<T>& body = get_body(body_index);
+    const auto body_mobod_index = body.mobod_index();
 
     // Get the pose for this body in the world frame.
     const RigidTransform<T>& X_WB = EvalBodyPoseInWorld(context, body);
@@ -2242,7 +2336,7 @@ void MultibodyPlant<T>::AddAppliedExternalSpatialForces(
     const Vector3<T> p_BoBq_W = X_WB.rotation() * force_structure.p_BoBq_B;
 
     // Shift the spatial force from Bq to Bo.
-    F_BBo_W_array[body_node_index] += force_structure.F_Bq_W.Shift(-p_BoBq_W);
+    F_BBo_W_array[body_mobod_index] += force_structure.F_Bq_W.Shift(-p_BoBq_W);
   }
 }
 
@@ -2571,7 +2665,7 @@ void MultibodyPlant<T>::CalcGeneralizedContactForcesContinuous(
       EvalSpatialContactForcesContinuous(context);
 
   // Bodies' accelerations and inboard mobilizer reaction forces, respectively,
-  // ordered by BodyNodeIndex and required as output arguments for
+  // ordered by MobodIndex and required as output arguments for
   // CalcInverseDynamics() below but otherwise not used by this method.
   std::vector<SpatialAcceleration<T>> A_WB_array(num_bodies());
   std::vector<SpatialForce<T>> F_BMo_W_array(num_bodies());
@@ -3318,7 +3412,7 @@ void MultibodyPlant<T>::CalcBodyPosesOutput(
   this->ValidateContext(context);
   X_WB_all->resize(num_bodies());
   for (BodyIndex body_index(0); body_index < this->num_bodies(); ++body_index) {
-    const Body<T>& body = get_body(body_index);
+    const RigidBody<T>& body = get_body(body_index);
     X_WB_all->at(body_index) = EvalBodyPoseInWorld(context, body);
   }
 }
@@ -3331,7 +3425,7 @@ void MultibodyPlant<T>::CalcBodySpatialVelocitiesOutput(
   this->ValidateContext(context);
   V_WB_all->resize(num_bodies());
   for (BodyIndex body_index(0); body_index < this->num_bodies(); ++body_index) {
-    const Body<T>& body = get_body(body_index);
+    const RigidBody<T>& body = get_body(body_index);
     V_WB_all->at(body_index) = EvalBodySpatialVelocityInWorld(context, body);
   }
 }
@@ -3345,21 +3439,21 @@ void MultibodyPlant<T>::CalcBodySpatialAccelerationsOutput(
   A_WB_all->resize(num_bodies());
   const AccelerationKinematicsCache<T>& ac = this->EvalForwardDynamics(context);
   for (BodyIndex body_index(0); body_index < this->num_bodies(); ++body_index) {
-    const Body<T>& body = get_body(body_index);
-    A_WB_all->at(body_index) = ac.get_A_WB(body.node_index());
+    const RigidBody<T>& body = get_body(body_index);
+    A_WB_all->at(body_index) = ac.get_A_WB(body.mobod_index());
   }
 }
 
 template <typename T>
 const SpatialAcceleration<T>&
 MultibodyPlant<T>::EvalBodySpatialAccelerationInWorld(
-    const Context<T>& context, const Body<T>& body_B) const {
+    const Context<T>& context, const RigidBody<T>& body_B) const {
   DRAKE_MBP_THROW_IF_NOT_FINALIZED();
   this->ValidateContext(context);
   DRAKE_DEMAND(this == &body_B.GetParentPlant());
   this->ValidateContext(context);
   const AccelerationKinematicsCache<T>& ac = this->EvalForwardDynamics(context);
-  return ac.get_A_WB(body_B.node_index());
+  return ac.get_A_WB(body_B.mobod_index());
 }
 
 template <typename T>
@@ -3373,18 +3467,18 @@ void MultibodyPlant<T>::CalcFramePoseOutput(const Context<T>& context,
   // NOTE: The body index to frame id map *always* includes the world body but
   // the world body does *not* get reported in the frame poses; only dynamic
   // frames do.
-  // TODO(amcastro-tri): Make use of Body::EvalPoseInWorld(context) once caching
-  // lands.
+  // TODO(amcastro-tri): Make use of RigidBody::EvalPoseInWorld(context) once
+  // caching lands.
   poses->clear();
   for (const auto& it : body_index_to_frame_id_) {
     const BodyIndex body_index = it.first;
     if (body_index == world_index()) continue;
-    const Body<T>& body = get_body(body_index);
+    const RigidBody<T>& body = get_body(body_index);
 
     // NOTE: The GeometryFrames for each body were registered in the world
     // frame, so we report poses in the world frame.
     poses->set_value(body_index_to_frame_id_.at(body_index),
-                     pc.get_X_WB(body.node_index()));
+                     pc.get_X_WB(body.mobod_index()));
   }
 }
 
@@ -3447,12 +3541,12 @@ void MultibodyPlant<T>::CalcReactionForces(
         internal_tree().get_joint_mobilizer(joint_index);
     const internal::Mobilizer<T>& mobilizer =
         internal_tree().get_mobilizer(mobilizer_index);
-    const internal::BodyNodeIndex body_node_index =
-        mobilizer.get_topology().body_node;
+    const internal::MobodIndex mobod_index =
+        mobilizer.get_topology().mobod_index;
 
     // Force on mobilized body B at mobilized frame's origin Mo, expressed in
     // world frame.
-    const SpatialForce<T>& F_BMo_W = F_BMo_W_vector[body_node_index];
+    const SpatialForce<T>& F_BMo_W = F_BMo_W_vector[mobod_index];
 
     // Frames:
     const Frame<T>& frame_Jp = joint.frame_on_parent();

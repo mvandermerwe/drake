@@ -63,8 +63,7 @@ std::string MakeLcmChannelNameForRole(const std::string& channel,
  SceneGraph instance (whose QueryObject-valued output port is connected to this
  system's input port).
 
- The messages are compatible with the legacy `drake_visualizer` application of
- days past, or its modern re-implementation
+ The messages are compatible with
  <a href="/pydrake/pydrake.visualization.meldis.html">Meldis</a>.
 
  @system
@@ -274,8 +273,7 @@ class DrakeVisualizer final : public systems::LeafSystem<T> {
   /* Dispatches a "draw geometry" message (see lcmt_viewer_draw) -- the
    definition of the poses of all non-deformable geometries. */
   static void SendDrawNonDeformableMessage(
-      const QueryObject<T>& query_object,
-      const DrakeVisualizerParams& params,
+      const QueryObject<T>& query_object, const DrakeVisualizerParams& params,
       const std::vector<internal::DynamicFrameData>& dynamic_frames,
       double time, lcm::DrakeLcmInterface* lcm);
 

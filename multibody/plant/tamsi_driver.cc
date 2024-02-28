@@ -29,10 +29,10 @@ TamsiDriver<T>::TamsiDriver(const CompliantContactManager<T>* manager)
 template <typename T>
 internal::ContactJacobians<T> TamsiDriver<T>::CalcContactJacobians(
     const systems::Context<T>& context) const {
-  const DiscreteContactData<ContactPairKinematics<T>>& contact_kinematics =
-      manager().EvalContactKinematics(context);
+  const DiscreteContactData<DiscreteContactPair<T>>& contact_pairs =
+      manager().EvalDiscreteContactPairs(context);
 
-  const int nc = contact_kinematics.size();
+  const int nc = contact_pairs.size();
   const int nv = manager().plant().num_velocities();
   internal::ContactJacobians<T> contact_jacobians;
   contact_jacobians.Jc = MatrixX<T>::Zero(3 * nc, nv);
@@ -42,9 +42,9 @@ internal::ContactJacobians<T> TamsiDriver<T>::CalcContactJacobians(
   const auto& topology = tree_topology();
   for (int i = 0; i < nc; ++i) {
     const int row_offset = 3 * i;
-    const ContactPairKinematics<T>& pair_kinematics = contact_kinematics[i];
-    for (const typename ContactPairKinematics<T>::JacobianTreeBlock&
-             tree_jacobian : pair_kinematics.jacobian) {
+    const DiscreteContactPair<T>& contact_pair = contact_pairs[i];
+    for (const typename DiscreteContactPair<T>::JacobianTreeBlock&
+             tree_jacobian : contact_pair.jacobian) {
       const int col_offset =
           topology.tree_velocities_start_in_v(tree_jacobian.tree);
       const int tree_nv = topology.num_tree_velocities(tree_jacobian.tree);
@@ -94,7 +94,7 @@ void TamsiDriver<T>::CalcContactSolverResults(
   plant().CalcMassMatrix(context, &M0);
 
   // Workspace for inverse dynamics:
-  // Bodies' accelerations, ordered by BodyNodeIndex.
+  // Bodies' accelerations, ordered by MobodIndex.
   std::vector<SpatialAcceleration<T>> A_WB_array(plant().num_bodies());
   // Generalized accelerations.
   VectorX<T> vdot = VectorX<T>::Zero(nv);
@@ -314,8 +314,8 @@ void TamsiDriver<T>::CalcAndAddSpatialContactForcesFromContactResults(
   for (int i = 0; i < contact_results.num_point_pair_contacts(); ++i) {
     const PointPairContactInfo<T>& pair =
         contact_results.point_pair_contact_info(i);
-    const Body<T>& bodyA = plant().get_body(pair.bodyA_index());
-    const Body<T>& bodyB = plant().get_body(pair.bodyB_index());
+    const RigidBody<T>& bodyA = plant().get_body(pair.bodyA_index());
+    const RigidBody<T>& bodyB = plant().get_body(pair.bodyB_index());
     const Vector3<T>& f_Bc_W = pair.contact_force();
     const Vector3<T>& p_WC = pair.contact_point();
     const SpatialForce<T> F_Bc_W(Vector3<T>::Zero(), f_Bc_W);
@@ -332,8 +332,8 @@ void TamsiDriver<T>::CalcAndAddSpatialContactForcesFromContactResults(
     const Vector3<T> p_CB_W = p_WB - p_WC;
     const SpatialForce<T> F_Bo_W = F_Bc_W.Shift(p_CB_W);
 
-    spatial_contact_forces->at(bodyA.node_index()) += F_Ao_W;
-    spatial_contact_forces->at(bodyB.node_index()) += F_Bo_W;
+    spatial_contact_forces->at(bodyA.mobod_index()) += F_Ao_W;
+    spatial_contact_forces->at(bodyB.mobod_index()) += F_Bo_W;
   }
 
   // Add contribution from hydroelastic contact.
@@ -345,8 +345,8 @@ void TamsiDriver<T>::CalcAndAddSpatialContactForcesFromContactResults(
     const GeometryId geometryN_id = info.contact_surface().id_N();
     const BodyIndex bodyA_index = manager().FindBodyByGeometryId(geometryM_id);
     const BodyIndex bodyB_index = manager().FindBodyByGeometryId(geometryN_id);
-    const Body<T>& bodyA = plant().get_body(bodyA_index);
-    const Body<T>& bodyB = plant().get_body(bodyB_index);
+    const RigidBody<T>& bodyA = plant().get_body(bodyA_index);
+    const RigidBody<T>& bodyB = plant().get_body(bodyB_index);
 
     // Spatial contact force at the centroid of the contact surface.
     const SpatialForce<T>& F_Ac_W = info.F_Ac_W();
@@ -364,8 +364,8 @@ void TamsiDriver<T>::CalcAndAddSpatialContactForcesFromContactResults(
     const Vector3<T> p_CB_W = p_WB - p_WC;
     const SpatialForce<T> F_Bo_W = -F_Ac_W.Shift(p_CB_W);
 
-    spatial_contact_forces->at(bodyA.node_index()) += F_Ao_W;
-    spatial_contact_forces->at(bodyB.node_index()) += F_Bo_W;
+    spatial_contact_forces->at(bodyA.mobod_index()) += F_Ao_W;
+    spatial_contact_forces->at(bodyB.mobod_index()) += F_Bo_W;
   }
 }
 

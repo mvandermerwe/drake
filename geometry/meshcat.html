@@ -107,8 +107,8 @@
     }
 
     requestAnimationFrame( animate );
-    // Set background to match the legacy ``drake_visualizer`` application of
-    // days past.
+    // Set background to match the legacy ``drake_visualizer`` application from
+    // Drake's days past.
     viewer.set_property(['Background', '<object>'], "top_color",
                         [.95, .95, 1.0])
     viewer.set_property(['Background', '<object>'], "bottom_color",
@@ -182,13 +182,44 @@
       status_dom.textContent = "No connection to server. Attempting to reconnect...";
     }
 
+    const tracked_camera = urlParams.get('tracked_camera');
+    if (tracked_camera) {
+      viewer.set_render_callback(
+        `(function() {
+            var prior_message = new Uint8Array();
+            return function() {
+              if (this.connection.readyState == 1 /* OPEN */) {
+                var new_message = msgpack.encode({
+                  'type': 'camera_pose',
+                  'camera_pose': this.camera.matrixWorld.elements,
+                  // Changing projection matrices *can* lead to is_perspective()
+                  // returning some null-like value; we treat it as not
+                  // perspective.
+                  'is_perspective': this.is_perspective() == null ?
+                                        false : this.is_perspective()
+                });
+                // Only transmit the message when it changes.
+                if (!(new_message.length === prior_message.length &&
+                      new_message.every((x, i) => x === prior_message[i]))) {
+                  this.connection.send(new_message);
+                  prior_message = new_message;
+                }
+              }
+            }
+         })()`);
+    }
+
     url = location.toString();
     url = url.replace("http://", "ws://")
     url = url.replace("https://", "wss://")
     url = url.replace("/index.html", "/")
     url = url.replace("/meshcat.html", "/")
     make_connection(url, reconnect_ms);
-    <!-- CONNECTION BLOCK END -->
+
+    // Per our meshcat.h docs, using XR when offline is not supported. Adding
+    // offline support might be possible by moving the 'webxr' and 'controller'
+    // handling outside of the CONNECTION BLOCK comment region and adding
+    // meshcat_manual_test coverage.
 
     const webxrMode = urlParams.get('webxr');
     if (webxrMode) {
@@ -204,8 +235,7 @@
         type: "visualize_vr_controller"
       });
     }
-
-
+    <!-- CONNECTION BLOCK END -->
 
   </script>
 

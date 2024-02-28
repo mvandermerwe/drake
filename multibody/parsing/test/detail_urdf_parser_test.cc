@@ -42,6 +42,12 @@ using drake::internal::DiagnosticPolicy;
 using geometry::GeometryId;
 using geometry::SceneGraph;
 
+// Fixture to add test coverage for the URDF parser. Some features such as mimic
+// joints and ball constraints are only supported in discrete mode when using
+// the SAP solver. For testing such features, we set a model approximation that
+// uses the SAP solver. More specifically, we call
+// set_discrete_contact_approximation(DiscreteContactApproximation::kSap) on the
+// MultibodyPlant used for testing before parsing.
 class UrdfParserTest : public test::DiagnosticPolicyTestBase {
  public:
   UrdfParserTest() {
@@ -346,7 +352,8 @@ TEST_F(UrdfParserTest, JointTypeUnknown) {
 TEST_F(UrdfParserTest, MimicNoSap) {
   // Currently the <mimic> tag is only supported by SAP. Setting the solver
   // to TAMSI should be a warning.
-  plant_.set_discrete_contact_solver(DiscreteContactSolver::kTamsi);
+  plant_.set_discrete_contact_approximation(
+      DiscreteContactApproximation::kTamsi);
   EXPECT_NE(AddModelFromUrdfString(R"""(
     <robot name='a'>
       <link name='parent'/>
@@ -366,7 +373,7 @@ TEST_F(UrdfParserTest, MimicNoSap) {
 
 TEST_F(UrdfParserTest, MimicNoJoint) {
   // Currently the <mimic> tag is only supported by SAP.
-  plant_.set_discrete_contact_solver(DiscreteContactSolver::kSap);
+  plant_.set_discrete_contact_approximation(DiscreteContactApproximation::kSap);
   EXPECT_NE(AddModelFromUrdfString(R"""(
     <robot name='a'>
       <link name='parent'/>
@@ -384,7 +391,7 @@ TEST_F(UrdfParserTest, MimicNoJoint) {
 
 TEST_F(UrdfParserTest, MimicBadJoint) {
   // Currently the <mimic> tag is only supported by SAP.
-  plant_.set_discrete_contact_solver(DiscreteContactSolver::kSap);
+  plant_.set_discrete_contact_approximation(DiscreteContactApproximation::kSap);
   EXPECT_NE(AddModelFromUrdfString(R"""(
     <robot name='a'>
       <link name='parent'/>
@@ -402,7 +409,7 @@ TEST_F(UrdfParserTest, MimicBadJoint) {
 
 TEST_F(UrdfParserTest, MimicSameJoint) {
   // Currently the <mimic> tag is only supported by SAP.
-  plant_.set_discrete_contact_solver(DiscreteContactSolver::kSap);
+  plant_.set_discrete_contact_approximation(DiscreteContactApproximation::kSap);
   EXPECT_NE(AddModelFromUrdfString(R"""(
     <robot name='a'>
       <link name='parent'/>
@@ -420,7 +427,7 @@ TEST_F(UrdfParserTest, MimicSameJoint) {
 
 TEST_F(UrdfParserTest, MimicMismatchedJoint) {
   // Currently the <mimic> tag is only supported by SAP.
-  plant_.set_discrete_contact_solver(DiscreteContactSolver::kSap);
+  plant_.set_discrete_contact_approximation(DiscreteContactApproximation::kSap);
   EXPECT_NE(AddModelFromUrdfString(R"""(
     <robot name='a'>
       <link name='parent'/>
@@ -443,7 +450,7 @@ TEST_F(UrdfParserTest, MimicMismatchedJoint) {
 
 TEST_F(UrdfParserTest, MimicOnlyOneDOFJoint) {
   // Currently the <mimic> tag is only supported by SAP.
-  plant_.set_discrete_contact_solver(DiscreteContactSolver::kSap);
+  plant_.set_discrete_contact_approximation(DiscreteContactApproximation::kSap);
   EXPECT_NE(AddModelFromUrdfString(R"""(
     <robot name='a'>
       <link name='parent'/>
@@ -466,7 +473,7 @@ TEST_F(UrdfParserTest, MimicOnlyOneDOFJoint) {
 
 TEST_F(UrdfParserTest, MimicFloatingJoint) {
   // Currently the <mimic> tag is only supported by SAP.
-  plant_.set_discrete_contact_solver(DiscreteContactSolver::kSap);
+  plant_.set_discrete_contact_approximation(DiscreteContactApproximation::kSap);
   EXPECT_NE(AddModelFromUrdfString(R"""(
     <robot name='a'>
       <link name='parent'/>
@@ -494,7 +501,7 @@ TEST_F(UrdfParserTest, MimicFloatingJoint) {
 // error.
 TEST_F(UrdfParserTest, MimicDifferentModelInstances) {
   // Currently the <mimic> tag is only supported by SAP.
-  plant_.set_discrete_contact_solver(DiscreteContactSolver::kSap);
+  plant_.set_discrete_contact_approximation(DiscreteContactApproximation::kSap);
   EXPECT_NE(AddModelFromUrdfString(R"""(
     <robot name='a'>
       <link name='parent'/>
@@ -796,7 +803,7 @@ TEST_F(UrdfParserTest, TestRegisteredSceneGraph) {
 
 TEST_F(UrdfParserTest, JointParsingTest) {
   // We currently need kSap for the mimic element to parse without error.
-  plant_.set_discrete_contact_solver(DiscreteContactSolver::kSap);
+  plant_.set_discrete_contact_approximation(DiscreteContactApproximation::kSap);
   const std::string full_name = FindResourceOrThrow(
       "drake/multibody/parsing/test/urdf_parser_test/"
       "joint_parsing_test.urdf");
@@ -1122,21 +1129,21 @@ TEST_F(UrdfParserTest, AddingGeometriesToWorldLink) {
 }
 
 // Reports if the frame with the given id has a geometry with the given role
-// whose name is the same as what ShapeName(ShapeType{}) would produce.
+// whose name is the same as what ShapeType{}.type_name() would produce.
 template <typename ShapeType>
 ::testing::AssertionResult FrameHasShape(geometry::FrameId frame_id,
                                          geometry::Role role,
                                          const SceneGraph<double>& scene_graph,
                                          const ShapeType& shape) {
   const auto& inspector = scene_graph.model_inspector();
-  const std::string name = geometry::ShapeName(shape).name();
+  const std::string name{shape.type_name()};
   try {
     // Note: MBP prepends the model index to the geometry name; in this case
     // that model instance name is "test_robot".
     const geometry::GeometryId geometry_id =
         inspector.GetGeometryIdByName(frame_id, role, "test_robot::" + name);
-    const std::string shape_type =
-        geometry::ShapeName(inspector.GetShape(geometry_id)).name();
+    const std::string_view shape_type =
+        inspector.GetShape(geometry_id).type_name();
     if (shape_type != name) {
       return ::testing::AssertionFailure()
           << "Geometry with role " << role << " has wrong shape type."
@@ -1506,7 +1513,8 @@ class BallConstraintTest : public UrdfParserTest {
     // TODO(joemasterjohn): Currently ball constraints are only supported in
     // SAP.
     // Add coverage for other solvers and continuous mode when available.
-    plant_.set_discrete_contact_solver(DiscreteContactSolver::kSap);
+    plant_.set_discrete_contact_approximation(
+        DiscreteContactApproximation::kSap);
   }
 
   void VerifyParameters(const std::string& body_A, const std::string& body_B,
@@ -1790,9 +1798,9 @@ TEST_F(UrdfParserTest, CollisionFilterGroupParsingTest) {
   // Get geometry ids for all the bodies.
   const geometry::SceneGraphInspector<double>& inspector =
       scene_graph_.model_inspector();
-  static constexpr int kNumLinks = 6;
+  static constexpr int kNumLinks = 10;
   std::vector<GeometryId> ids(1 + kNumLinks);  // allow 1-based indices.
-  for (int k = 1; k <= 6; ++k) {
+  for (int k = 1; k <= kNumLinks; ++k) {
     const auto geometry_id = inspector.GetGeometryIdByName(
         plant_.GetBodyFrameIdOrThrow(
             plant_.GetBodyByName(fmt::format("link{}", k)).index()),
@@ -1840,6 +1848,19 @@ TEST_F(UrdfParserTest, CollisionFilterGroupParsingTest) {
   // (5, 6) - filtered by group_link56 ignores itself
   EXPECT_TRUE(inspector.CollisionFiltered(ids[5], ids[6]));
 
+  // To test composite group building, we have a separate set of geometries
+  // 7-10. They are combined into a single self-ignoring group.
+  EXPECT_TRUE(inspector.CollisionFiltered(ids[7], ids[8]));
+  EXPECT_TRUE(inspector.CollisionFiltered(ids[7], ids[9]));
+  EXPECT_TRUE(inspector.CollisionFiltered(ids[7], ids[10]));
+  EXPECT_TRUE(inspector.CollisionFiltered(ids[8], ids[9]));
+  EXPECT_TRUE(inspector.CollisionFiltered(ids[8], ids[10]));
+  EXPECT_TRUE(inspector.CollisionFiltered(ids[9], ids[10]));
+
+  // Spot check that the two sets are separate.
+  EXPECT_FALSE(inspector.CollisionFiltered(ids[1], ids[10]));
+  EXPECT_FALSE(inspector.CollisionFiltered(ids[6], ids[7]));
+
   // Make sure we can add the model a second time.
   AddModelFromUrdfFile(full_name, "model2");
 }
@@ -1866,6 +1887,20 @@ TEST_F(UrdfParserTest, CollisionFilterGroupMissingLink) {
   EXPECT_THAT(TakeError(), MatchesRegex(
                   ".*The tag <drake:member> does not specify the required "
                   "attribute \"link\"."));
+  EXPECT_THAT(TakeError(), MatchesRegex(".*'robot::group_a'.*no members"));
+}
+
+TEST_F(UrdfParserTest, CollisionFilterGroupMissingMemberGroupName) {
+  EXPECT_NE(AddModelFromUrdfString(R"""(
+    <robot name='robot'>
+      <link name='a'/>
+      <drake:collision_filter_group name="group_a">
+        <drake:member_group/>
+      </drake:collision_filter_group>
+    </robot>)""", ""), std::nullopt);
+  EXPECT_THAT(TakeError(), MatchesRegex(
+                  ".*The tag <drake:member_group> does not specify the"
+                  " required attribute \"name\"."));
   EXPECT_THAT(TakeError(), MatchesRegex(".*'robot::group_a'.*no members"));
 }
 

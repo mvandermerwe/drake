@@ -2,6 +2,7 @@
 # //tools/wheel:builder for the user interface.
 
 import argparse
+import locale
 import os
 import re
 import sys
@@ -13,7 +14,8 @@ build_root = '/opt/drake-wheel-build'
 test_root = '/opt/drake-wheel-test'
 
 # Location where the wheel will be produced.
-wheelhouse = os.path.join(build_root, 'wheel', 'wheelhouse')
+wheel_root = os.path.join(build_root, 'wheel')
+wheelhouse = os.path.join(wheel_root, 'wheelhouse')
 
 # Location of various scripts and other artifacts used to complete the build.
 resource_root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -87,6 +89,14 @@ def do_main(args, platform):
     complete the build.
     """
 
+    # Ensure we and any subprocesses are speaking UTF-8.
+    locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
+    locale_keys = [k for k in os.environ.keys() if k.startswith('LC_')]
+    for k in locale_keys:
+        os.environ.pop(k)
+    os.environ['LC_ALL'] = 'en_US.UTF-8'
+    os.environ['LANG'] = 'en_US.UTF-8'
+
     # Work around `bazel run` changing the working directory; this is to allow
     # the user to pass in relative paths in a sane manner.
     real_cwd = os.environ.get('BUILD_WORKING_DIRECTORY')
@@ -111,11 +121,6 @@ def do_main(args, platform):
     parser.add_argument(
         '--no-test', dest='test', action='store_false',
         help='build images but do not run tests')
-    # TODO(jwnimmer-tri) Remove this argument after we've updated CI not to
-    # provide it anymore.
-    parser.add_argument(
-        '-t', dest='_', action='store_true',
-        help='ignored for backwards compatibility')
 
     if platform is not None:
         platform.add_build_arguments(parser)
@@ -127,8 +132,6 @@ def do_main(args, platform):
 
     # Parse arguments.
     options = parser.parse_args(args)
-    if not options.extract:
-        options.test = False
     if platform is not None:
         platform.fixup_options(options)
 

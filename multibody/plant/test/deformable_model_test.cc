@@ -270,7 +270,7 @@ TEST_F(DeformableModelTest, AddFixedConstraint) {
   */
   DeformableBodyId deformable_id = RegisterSphere(100, X_WA);
   ASSERT_EQ(deformable_model_ptr_->GetFemModel(deformable_id).num_nodes(), 7);
-  const Body<double>& rigid_body =
+  const RigidBody<double>& rigid_body =
       plant_->AddRigidBody("box", SpatialInertia<double>());
   geometry::Box box(1.0, 1.0, 1.0);
   const RigidTransformd X_BA(Vector3d(-2, 0, 0));
@@ -308,7 +308,7 @@ TEST_F(DeformableModelTest, AddFixedConstraint) {
                std::exception);
   /* Non-existant rigid body (registered with a different MbP). */
   MultibodyPlant<double> other_plant(0.0);
-  const Body<double>& wrong_rigid_body =
+  const RigidBody<double>& wrong_rigid_body =
       other_plant.AddRigidBody("wrong body", SpatialInertia<double>());
   DRAKE_EXPECT_THROWS_MESSAGE(
       deformable_model_ptr_->AddFixedConstraint(deformable_id, wrong_rigid_body,
@@ -411,9 +411,11 @@ TEST_F(DeformableModelTest, ExternalForces) {
     ASSERT_TRUE((g != nullptr) ^ (f != nullptr));
     const Vector3d p_WQ(1, 2, 3);
     if (g != nullptr) {
+      EXPECT_EQ(g->density_type(), ForceDensityType::kPerReferenceVolume);
       EXPECT_EQ(force->EvaluateAt(*plant_context, p_WQ),
                 gravity_vector * default_body_config_.mass_density());
     } else {
+      EXPECT_EQ(f->density_type(), ForceDensityType::kPerCurrentVolume);
       const double scale = 2.71;
       constant_force_ptr->get_input_port().FixValue(plant_context.get(),
                                                     Vector1d(scale));

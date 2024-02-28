@@ -20,6 +20,7 @@ drake_cc_package_library(
     deps = [
         ":collision_filter_declaration",
         ":collision_filter_manager",
+        ":deformable_mesh_with_bvh",
         ":drake_visualizer",
         ":drake_visualizer_params",
         ":geometry_frame",
@@ -34,6 +35,7 @@ drake_cc_package_library(
         ":internal_geometry",
         ":kinematics_vector",
         ":make_mesh_for_deformable",
+        ":mesh_deformation_interpolator",
         ":meshcat",
         ":meshcat_animation",
         ":meshcat_graphviz",
@@ -110,6 +112,17 @@ drake_cc_library(
         ":geometry_ids",
         ":geometry_set",
         "//geometry/proximity:collision_filter",
+    ],
+)
+
+drake_cc_library(
+    name = "deformable_mesh_with_bvh",
+    srcs = ["deformable_mesh_with_bvh.cc"],
+    hdrs = ["deformable_mesh_with_bvh.h"],
+    deps = [
+        "//geometry/proximity:bvh",
+        "//geometry/proximity:bvh_updater",
+        "//geometry/proximity:volume_mesh",
     ],
 )
 
@@ -264,6 +277,17 @@ drake_cc_library(
         "//geometry/proximity:make_mesh_from_vtk",
         "//geometry/proximity:make_sphere_mesh",
         "//geometry/proximity:volume_mesh",
+    ],
+)
+
+drake_cc_library(
+    name = "mesh_deformation_interpolator",
+    srcs = ["mesh_deformation_interpolator.cc"],
+    hdrs = ["mesh_deformation_interpolator.h"],
+    deps = [
+        "//geometry/proximity:triangle_surface_mesh",
+        "//geometry/proximity:volume_mesh",
+        "//geometry/proximity:volume_to_surface_mesh",
     ],
 )
 
@@ -452,13 +476,23 @@ drake_cc_googletest(
 
 drake_cc_library(
     name = "meshcat",
-    srcs = ["meshcat.cc"],
+    srcs = [
+        "meshcat.cc",
+        "meshcat_file_storage_internal.cc",
+        "meshcat_internal.cc",
+    ],
     hdrs = [
         "meshcat.h",
-        "meshcat_types.h",
+        "meshcat_file_storage_internal.h",
+        "meshcat_internal.h",
+        "meshcat_params.h",
+        "meshcat_types_internal.h",
     ],
     data = [":meshcat_resources"],
-    install_hdrs_exclude = ["meshcat_types.h"],
+    install_hdrs_exclude = [
+        "meshcat_internal.h",
+        "meshcat_types_internal.h",
+    ],
     interface_deps = [
         ":meshcat_animation",
         ":rgba",
@@ -474,8 +508,10 @@ drake_cc_library(
         "//common:find_resource",
         "//common:network_policy",
         "//common:scope_exit",
+        "//common:sha256",
         "@common_robotics_utilities",
         "@msgpack_internal//:msgpack",
+        "@nlohmann_internal//:nlohmann",
         "@stduuid_internal//:stduuid",
         "@uwebsockets_internal//:uwebsockets",
     ],
@@ -497,6 +533,7 @@ drake_cc_binary(
     deps = [
         ":meshcat",
         ":meshcat_visualizer",
+        "//common:add_text_logging_gflags",
         "//common/test_utilities:maybe_pause_for_user",
         "//multibody/meshcat:contact_visualizer",
         "//multibody/parsing",
@@ -529,6 +566,33 @@ drake_cc_googletest(
         "//common/test_utilities:eigen_matrix_compare",
         "//common/test_utilities:expect_throws_message",
         "@msgpack_internal//:msgpack",
+    ],
+)
+
+drake_cc_googletest(
+    name = "meshcat_file_storage_internal_test",
+    tags = ["cpu:2"],
+    deps = [
+        ":meshcat",
+    ],
+)
+
+drake_cc_googletest(
+    name = "meshcat_internal_test",
+    data = [
+        "//geometry/render:test_models",
+    ],
+    deps = [
+        ":meshcat",
+        "@nlohmann_internal//:nlohmann",
+    ],
+)
+
+drake_cc_googletest(
+    name = "meshcat_params_test",
+    deps = [
+        ":meshcat",
+        "//common/yaml:yaml_io",
     ],
 )
 
@@ -699,6 +763,15 @@ drake_cc_googletest(
 )
 
 drake_cc_googletest(
+    name = "deformable_mesh_with_bvh_test",
+    deps = [
+        ":deformable_mesh_with_bvh",
+        "//common/test_utilities:eigen_matrix_compare",
+        "//geometry/proximity:make_box_mesh",
+    ],
+)
+
+drake_cc_googletest(
     name = "drake_visualizer_test",
     deps = [
         ":drake_visualizer",
@@ -805,6 +878,16 @@ drake_cc_googletest(
 )
 
 drake_cc_googletest(
+    name = "mesh_deformation_interpolator_test",
+    deps = [
+        ":mesh_deformation_interpolator",
+        "//common/test_utilities:eigen_matrix_compare",
+        "//common/test_utilities:expect_throws_message",
+        "//geometry/proximity:make_sphere_mesh",
+    ],
+)
+
+drake_cc_googletest(
     name = "proximity_properties_test",
     deps = [
         ":geometry_roles",
@@ -869,6 +952,7 @@ drake_cc_googletest(
 
 drake_cc_googletest(
     name = "shape_to_string_test",
+    copts = ["-Wno-deprecated-declarations"],
     deps = [
         ":shape_to_string",
     ],

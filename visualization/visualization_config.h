@@ -10,10 +10,8 @@
 namespace drake {
 namespace visualization {
 
-// TODO(jwnimmer-tri or trowell-tri) Add an option to disable LCM entirely.
-
-/** Settings for what MultibodyPlant and SceneGraph should send to Meshcat,
-Meldis, and/or the legacy ``drake_visualizer`` application of days past.
+/** Settings for what MultibodyPlant and SceneGraph should send to Meshcat
+and/or Meldis.
 
 See ApplyVisualizationConfig() for how to enact this configuration. */
 struct VisualizationConfig {

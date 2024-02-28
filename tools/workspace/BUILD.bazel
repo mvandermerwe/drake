@@ -2,10 +2,6 @@ load("//tools/skylark:py.bzl", "py_library")
 load("//tools/install:check_licenses.bzl", "check_licenses")
 load("//tools/install:install.bzl", "install")
 load("//tools/skylark:drake_py.bzl", "drake_py_binary", "drake_py_test")
-load(
-    "@drake_visualizer//:defs.bzl",
-    _DRAKE_VISUALIZER_ENABLED = "ENABLED",
-)
 load("//tools/lint:lint.bzl", "add_lint_tests")
 
 py_library(
@@ -43,6 +39,7 @@ drake_py_binary(
     srcs = ["vendor_cxx.py"],
     visibility = [
         # These should all be of the form "@foo_internal//:__subpackages__".
+        "@clarabel_cpp_internal//:__subpackages__",
         "@clp_internal//:__subpackages__",
         "@coinutils_internal//:__subpackages__",
         "@conex_internal//:__subpackages__",
@@ -116,18 +113,17 @@ _DRAKE_EXTERNAL_PACKAGE_INSTALLS = ["@%s//:install" % p for p in [
 ]] + ["//tools/workspace/%s:install" % p for p in [
     "abseil_cpp_internal",
     "conex_internal",
-    "drake_visualizer",
     "gflags",
     "libjpeg_turbo_internal",
 ]] + select({
     "//conditions:default": ["@csdp_internal//:install"],
     "//tools:no_csdp": [],
 }) + select({
-    "//tools:with_clarabel": [
+    "//conditions:default": [
         "//tools/workspace/crate_universe:install",
         "@clarabel_cpp_internal//:install",
     ],
-    "//conditions:default": [],
+    "//tools:no_clarabel": [],
 }) + select({
     "//tools:with_gurobi": ["@gurobi//:install"],
     "//conditions:default": [],
@@ -163,11 +159,7 @@ check_licenses(
         "@commons_io//:install",
         "@net_sf_jchart2d//:install",
         "@org_apache_xmlgraphics_commons//:install",
-    ] + ([
-        # When disabled, this installs only a stub program under Drake's
-        # license; no other LICENSE file is relevant.
-        "//tools/workspace/drake_visualizer:install",
-    ] if not _DRAKE_VISUALIZER_ENABLED else []),
+    ],
 )
 
 add_lint_tests()

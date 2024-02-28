@@ -8,10 +8,8 @@
 
 // To ease build system upkeep, we annotate VTK includes with their deps.
 #include <vtkActor.h>                // vtkRenderingCore
-#include <vtkAutoInit.h>             // vtkCommonCore
 #include <vtkCommand.h>              // vtkCommonCore
 #include <vtkImageExport.h>          // vtkIOImage
-#include <vtkLight.h>                // vtkRenderingCore
 #include <vtkNew.h>                  // vtkCommonCore
 #include <vtkPolyDataAlgorithm.h>    // vtkCommonExecutionModel
 #include <vtkRenderWindow.h>         // vtkRenderingCore
@@ -29,24 +27,10 @@
 #include "drake/geometry/render/render_material.h"
 #include "drake/geometry/render_vtk/render_engine_vtk_params.h"
 
-#ifndef DRAKE_DOXYGEN_CXX
-// This, and the ModuleInitVtkRenderingOpenGL2, provide the basis for enabling
-// VTK's OpenGL2 infrastructure.
-VTK_AUTOINIT_DECLARE(vtkRenderingOpenGL2)
-#endif
-
 namespace drake {
 namespace geometry {
 namespace render_vtk {
 namespace internal {
-
-#ifndef DRAKE_DOXYGEN_CXX
-struct ModuleInitVtkRenderingOpenGL2 {
-  ModuleInitVtkRenderingOpenGL2() {
-    VTK_AUTOINIT_CONSTRUCT(vtkRenderingOpenGL2)
-  }
-};
-#endif
 
 // A callback class for setting uniform variables used in shader programs,
 // namely z_near and z_far, when vtkCommand::UpdateShaderEvent is caught.
@@ -88,7 +72,7 @@ enum ImageType {
 
 /* See documentation of MakeRenderEngineVtk().  */
 class DRAKE_NO_EXPORT RenderEngineVtk : public render::RenderEngine,
-                                        private ModuleInitVtkRenderingOpenGL2 {
+                                        private ShapeReifier {
  public:
   /* @name Does not allow copy, move, or assignment  */
   //@{
@@ -113,7 +97,7 @@ class DRAKE_NO_EXPORT RenderEngineVtk : public render::RenderEngine,
 
   /* @name    Shape reification  */
   //@{
-  using RenderEngine::ImplementGeometry;
+  using ShapeReifier::ImplementGeometry;
   void ImplementGeometry(const Box& box, void* user_data) override;
   void ImplementGeometry(const Capsule& capsule, void* user_data) override;
   void ImplementGeometry(const Convex& convex, void* user_data) override;
@@ -322,7 +306,7 @@ class DRAKE_NO_EXPORT RenderEngineVtk : public render::RenderEngine,
   Rgba default_diffuse_{0.9, 0.45, 0.1, 1.0};
 
   // The color to clear the color buffer to.
-  systems::sensors::ColorD default_clear_color_;
+  Rgba default_clear_color_;
 
   // The collection of per-geometry actors -- one actor per pipeline (color,
   // depth, and label) -- keyed by the geometry's GeometryId.

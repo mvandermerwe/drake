@@ -153,6 +153,22 @@ void DefineIkDifferential(py::module m) {
       "DoDifferentialInverseKinematics",
       [](const multibody::MultibodyPlant<double>& robot,
           const systems::Context<double>& context,
+          const Vector6<double>& V_AE_desired,
+          const multibody::Frame<double>& frame_A,
+          const multibody::Frame<double>& frame_E,
+          const DifferentialInverseKinematicsParameters& parameters) {
+        return DoDifferentialInverseKinematics(
+            robot, context, V_AE_desired, frame_A, frame_E, parameters);
+      },
+      py::arg("robot"), py::arg("context"), py::arg("V_AE_desired"),
+      py::arg("frame_A"), py::arg("frame_E"), py::arg("parameters"),
+      doc.DoDifferentialInverseKinematics
+          .doc_6args_robot_context_V_AE_desired_frame_A_frame_E_parameters);
+
+  m.def(
+      "DoDifferentialInverseKinematics",
+      [](const multibody::MultibodyPlant<double>& robot,
+          const systems::Context<double>& context,
           const math::RigidTransform<double>& X_WE_desired,
           const multibody::Frame<double>& frame_E,
           const DifferentialInverseKinematicsParameters& parameters) {
@@ -164,11 +180,38 @@ void DefineIkDifferential(py::module m) {
       doc.DoDifferentialInverseKinematics
           .doc_5args_robot_context_X_WE_desired_frame_E_parameters);
 
+  m.def(
+      "DoDifferentialInverseKinematics",
+      [](const multibody::MultibodyPlant<double>& robot,
+          const systems::Context<double>& context,
+          const math::RigidTransform<double>& X_AE_desired,
+          const multibody::Frame<double>& frame_A,
+          const multibody::Frame<double>& frame_E,
+          const DifferentialInverseKinematicsParameters& parameters) {
+        return DoDifferentialInverseKinematics(
+            robot, context, X_AE_desired, frame_A, frame_E, parameters);
+      },
+      py::arg("robot"), py::arg("context"), py::arg("X_AE_desired"),
+      py::arg("frame_A"), py::arg("frame_E"), py::arg("parameters"),
+      doc.DoDifferentialInverseKinematics
+          .doc_6args_robot_context_X_AE_desired_frame_A_frame_E_parameters);
+
   {
     using Class = DifferentialInverseKinematicsIntegrator;
     constexpr auto& cls_doc = doc.DifferentialInverseKinematicsIntegrator;
     py::class_<Class, LeafSystem<double>>(
         m, "DifferentialInverseKinematicsIntegrator", cls_doc.doc)
+        .def(py::init<const multibody::MultibodyPlant<double>&,
+                 const multibody::Frame<double>&,
+                 const multibody::Frame<double>&, double,
+                 const DifferentialInverseKinematicsParameters&,
+                 const systems::Context<double>*, bool>(),
+            // Keep alive, reference: `self` keeps `robot` alive.
+            py::keep_alive<1, 2>(), py::arg("robot"), py::arg("frame_A"),
+            py::arg("frame_E"), py::arg("time_step"), py::arg("parameters"),
+            py::arg("robot_context") = nullptr,
+            py::arg("log_only_when_result_state_changes") = true,
+            cls_doc.ctor.doc_7args)
         .def(py::init<const multibody::MultibodyPlant<double>&,
                  const multibody::Frame<double>&, double,
                  const DifferentialInverseKinematicsParameters&,
@@ -178,7 +221,7 @@ void DefineIkDifferential(py::module m) {
             py::arg("time_step"), py::arg("parameters"),
             py::arg("robot_context") = nullptr,
             py::arg("log_only_when_result_state_changes") = true,
-            cls_doc.ctor.doc)
+            cls_doc.ctor.doc_6args)
         .def("SetPositions", &Class::SetPositions, py::arg("context"),
             py::arg("positions"), cls_doc.SetPositions.doc)
         .def("ForwardKinematics", &Class::ForwardKinematics, py::arg("context"),

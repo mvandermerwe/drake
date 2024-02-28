@@ -55,6 +55,8 @@ drake_py_library(
 generate_pybind_documentation_header(
     name = "generate_pybind_documentation_header",
     out = "documentation_pybind.h",
+    # Anonymous namespace and deduction guides both confuse pybind.
+    exclude_hdr_patterns = ["drake/common/overloaded.h"],
     root_name = "pydrake_doc",
     targets = [
         "//tools/install/libdrake:drake_headers",
@@ -285,7 +287,6 @@ drake_py_unittest(
     data = ["//examples/pendulum:models"],
     deps = [
         ":all_py",
-        "//bindings/pydrake/common/test_utilities:deprecation_py",
     ],
 )
 
@@ -349,7 +350,6 @@ drake_py_unittest(
     name = "lcm_test",
     deps = [
         ":lcm_py",
-        "//bindings/pydrake/common/test_utilities:deprecation_py",
         "//lcmtypes:lcmtypes_drake_py",
     ],
 )

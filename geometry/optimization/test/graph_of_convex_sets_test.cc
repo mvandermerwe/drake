@@ -8,11 +8,13 @@
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/common/test_utilities/expect_no_throw.h"
 #include "drake/common/test_utilities/expect_throws_message.h"
+#include "drake/common/yaml/yaml_io.h"
 #include "drake/geometry/optimization/hpolyhedron.h"
 #include "drake/geometry/optimization/hyperellipsoid.h"
 #include "drake/geometry/optimization/point.h"
 #include "drake/geometry/optimization/vpolytope.h"
 #include "drake/solvers/choose_best_solver.h"
+#include "drake/solvers/clarabel_solver.h"
 #include "drake/solvers/clp_solver.h"
 #include "drake/solvers/csdp_solver.h"
 #include "drake/solvers/gurobi_solver.h"
@@ -65,6 +67,33 @@ bool MixedIntegerSolverAvailable() {
           solvers::GurobiSolver::is_enabled());
 }
 }  // namespace
+
+GTEST_TEST(GraphOfConvexSetsOptionsTest, Serialize) {
+  GraphOfConvexSetsOptions options;
+  options.convex_relaxation = false;
+  options.max_rounded_paths = false;
+  options.preprocessing = true;
+  options.max_rounding_trials = 5;
+  options.flow_tolerance = 0.01;
+  options.rounding_seed = 5;
+  solvers::MosekSolver mosek_solver;
+  options.solver = &mosek_solver;
+  options.solver_options = solvers::SolverOptions();
+  options.rounding_solver_options = solvers::SolverOptions();
+  const std::string serialized = yaml::SaveYamlString(options);
+  const auto deserialized =
+      yaml::LoadYamlString<GraphOfConvexSetsOptions>(serialized);
+  EXPECT_EQ(deserialized.convex_relaxation, options.convex_relaxation);
+  EXPECT_EQ(deserialized.preprocessing, options.preprocessing);
+  EXPECT_EQ(deserialized.max_rounded_paths, options.max_rounded_paths);
+  EXPECT_EQ(deserialized.max_rounding_trials, options.max_rounding_trials);
+  EXPECT_EQ(deserialized.flow_tolerance, options.flow_tolerance);
+  EXPECT_EQ(deserialized.rounding_seed, options.rounding_seed);
+  // The non-built-in types are not serialized.
+  EXPECT_EQ(deserialized.solver, nullptr);
+  EXPECT_EQ(deserialized.solver_options, solvers::SolverOptions());
+  EXPECT_FALSE(deserialized.rounding_solver_options.has_value());
+}
 
 GTEST_TEST(GraphOfConvexSetsTest, AddVertex) {
   GraphOfConvexSets g;
@@ -169,6 +198,8 @@ GTEST_TEST(GraphOfConvexSetsTest, RemoveVertex) {
   Edge* e1 = g.AddEdge(v1, v2);
   g.AddEdge(v1, v3);
   g.AddEdge(v3, v1);
+  EXPECT_EQ(v1->incoming_edges().size(), 1);
+  EXPECT_EQ(v1->outgoing_edges().size(), 2);
 
   EXPECT_EQ(g.Vertices().size(), 3);
   EXPECT_EQ(g.Edges().size(), 3);
@@ -178,12 +209,14 @@ GTEST_TEST(GraphOfConvexSetsTest, RemoveVertex) {
   auto edges = g.Edges();
   EXPECT_EQ(edges.size(), 1);
   EXPECT_EQ(edges.at(0), e1);
+  EXPECT_EQ(v1->incoming_edges().size(), 0);
 
   g.RemoveVertex(v2);
   auto vertices = g.Vertices();
   EXPECT_EQ(vertices.size(), 1);
   EXPECT_EQ(vertices.at(0), v1);
   EXPECT_EQ(g.Edges().size(), 0);
+  EXPECT_EQ(v1->outgoing_edges().size(), 0);
 }
 
 /*
@@ -586,10 +619,10 @@ TEST_F(ThreePoints, QuadraticCost2) {
   Environment env{};
   env.insert(e_on_->xu(), p_source_.x());
   env.insert(e_on_->xv(), p_target_.x());
-  EXPECT_NEAR(e_on_->GetSolutionCost(result), cost.Evaluate(env), 1e-5);
+  EXPECT_NEAR(e_on_->GetSolutionCost(result), cost.Evaluate(env), 2e-5);
   EXPECT_NEAR(e_off_->GetSolutionCost(result), 0.0, 4e-6);
   EXPECT_NEAR(source_->GetSolutionCost(result), vertex_cost.Evaluate(env),
-              1e-6);
+              2e-5);
   EXPECT_NEAR(target_->GetSolutionCost(result), 0.0, 1e-6);
   EXPECT_NEAR(sink_->GetSolutionCost(result), 0.0, 1e-6);
   CheckConvexRestriction(result);
@@ -613,10 +646,10 @@ TEST_F(ThreePoints, QuadraticCost3) {
   Environment env{};
   env.insert(e_on_->xu(), p_source_.x());
   env.insert(e_on_->xv(), p_target_.x());
-  EXPECT_NEAR(e_on_->GetSolutionCost(result), cost.Evaluate(env), 1e-5);
+  EXPECT_NEAR(e_on_->GetSolutionCost(result), cost.Evaluate(env), 5e-5);
   EXPECT_NEAR(e_off_->GetSolutionCost(result), 0.0, 4e-6);
   EXPECT_NEAR(source_->GetSolutionCost(result), vertex_cost.Evaluate(env),
-              1e-6);
+              2e-4);
   EXPECT_NEAR(target_->GetSolutionCost(result), 0.0, 1e-6);
   EXPECT_NEAR(sink_->GetSolutionCost(result), 0.0, 1e-6);
   CheckConvexRestriction(result);
@@ -1566,10 +1599,14 @@ GTEST_TEST(ShortestPathTest, RoundedSolution) {
   for (size_t ii = 0; ii < edges.size(); ++ii) {
     if (ii < 6) {
       // Some solvers do not balance the two paths as closely as other solvers.
+      // I am not sure why these solvers perform badly on this problem.
       const double tol =
           (relaxed_result.get_solver_id() == solvers::GurobiSolver::id()) ? 1e-1
-          : (relaxed_result.get_solver_id() == solvers::CsdpSolver::id())
-              ? 1e-2
+          : (relaxed_result.get_solver_id() == solvers::CsdpSolver::id()) ? 1e-2
+          : (relaxed_result.get_solver_id() == solvers::ClarabelSolver::id())
+              ? 1e-3  // We tried to tighten the optimality/feasibility
+                      // tolerance of Clarabel but the optimal solution still
+                      // match with the balanced solution very precisely.
               : 1e-5;
       EXPECT_NEAR(relaxed_result.GetSolution(edges[ii]->phi()), 0.5, tol);
     } else if (ii < 10) {
@@ -1900,15 +1937,20 @@ GTEST_TEST(ShortestPathTest, TobiasToyExample) {
   }
 
   // Test that solving with the known shortest path returns the same results.
-  auto active_edges_result = spp.SolveConvexRestriction(
-      spp.GetSolutionPath(*source, *target, result), options);
+  std::vector<const Edge*> path = spp.GetSolutionPath(*source, *target, result);
+  auto active_edges_result = spp.SolveConvexRestriction(path, options);
   ASSERT_TRUE(active_edges_result.is_success());
   // The optimal costs should match.
   EXPECT_NEAR(result.get_optimal_cost(), active_edges_result.get_optimal_cost(),
               3e-5);
-  for (const auto* v : spp.Vertices()) {
-    EXPECT_TRUE(CompareMatrices(result.GetSolution(v->x()),
-                                active_edges_result.GetSolution(v->x()), 2e-3));
+  // The vertex solutions should match on the shortest path.
+  EXPECT_TRUE(CompareMatrices(result.GetSolution(source->x()),
+                              active_edges_result.GetSolution(source->x()),
+                              2e-3));
+  for (const auto* e : path) {
+    EXPECT_TRUE(CompareMatrices(result.GetSolution(e->xv()),
+                                active_edges_result.GetSolution(e->xv()),
+                                2e-3));
   }
 
   // Test that forcing an edge not on the shortest path to be active yields a

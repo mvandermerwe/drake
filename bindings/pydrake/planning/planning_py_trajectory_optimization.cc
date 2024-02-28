@@ -2,6 +2,7 @@
 #include "drake/bindings/pydrake/geometry/optimization_pybind.h"
 #include "drake/bindings/pydrake/pydrake_pybind.h"
 #include "drake/bindings/pydrake/symbolic_types_pybind.h"
+#include "drake/geometry/optimization/convex_set.h"
 #include "drake/planning/trajectory_optimization/direct_collocation.h"
 #include "drake/planning/trajectory_optimization/direct_transcription.h"
 #include "drake/planning/trajectory_optimization/gcs_trajectory_optimization.h"
@@ -348,6 +349,11 @@ void DefinePlanningTrajectoryOptimization(py::module m) {
         .def("name", &Class::Subgraph::name, subgraph_doc.name.doc)
         .def("order", &Class::Subgraph::order, subgraph_doc.order.doc)
         .def("size", &Class::Subgraph::size, subgraph_doc.size.doc)
+        .def("Vertices",
+            overload_cast_explicit<const std::vector<
+                geometry::optimization::GraphOfConvexSets::Vertex*>&>(
+                &Class::Subgraph::Vertices),
+            py_rvp::reference_internal, subgraph_doc.Vertices.doc)
         .def(
             "regions",
             [](Class::Subgraph* self) {
@@ -393,8 +399,12 @@ void DefinePlanningTrajectoryOptimization(py::module m) {
             subgraph_edges_doc.AddPathContinuityConstraints.doc);
 
     gcs_traj_opt  // BR
-        .def(py::init<int>(), py::arg("num_positions"), cls_doc.ctor.doc)
+        .def(py::init<int, const std::vector<int>&>(), py::arg("num_positions"),
+            py::arg("continuous_revolute_joints") = std::vector<int>(),
+            cls_doc.ctor.doc)
         .def("num_positions", &Class::num_positions, cls_doc.num_positions.doc)
+        .def("continuous_revolute_joints", &Class::continuous_revolute_joints,
+            cls_doc.continuous_revolute_joints.doc)
         .def("GetGraphvizString", &Class::GetGraphvizString,
             py::arg("result") = std::nullopt, py::arg("show_slack") = true,
             py::arg("precision") = 3, py::arg("scientific") = false,
@@ -404,15 +414,18 @@ void DefinePlanningTrajectoryOptimization(py::module m) {
             [](Class& self,
                 const std::vector<geometry::optimization::ConvexSet*>& regions,
                 const std::vector<std::pair<int, int>>& edges_between_regions,
-                int order, double h_min, double h_max,
-                std::string name) -> Class::Subgraph& {
+                int order, double h_min, double h_max, std::string name,
+                std::optional<std::vector<Eigen::VectorXd>> edge_offsets)
+                -> Class::Subgraph& {
               return self.AddRegions(CloneConvexSets(regions),
-                  edges_between_regions, order, h_min, h_max, std::move(name));
+                  edges_between_regions, order, h_min, h_max, std::move(name),
+                  edge_offsets);
             },
             py_rvp::reference_internal, py::arg("regions"),
             py::arg("edges_between_regions"), py::arg("order"),
             py::arg("h_min") = 1e-6, py::arg("h_max") = 20,
-            py::arg("name") = "", cls_doc.AddRegions.doc_6args)
+            py::arg("name") = "", py::arg("edge_offsets") = std::nullopt,
+            cls_doc.AddRegions.doc_7args)
         .def(
             "AddRegions",
             [](Class& self,
@@ -448,11 +461,19 @@ void DefinePlanningTrajectoryOptimization(py::module m) {
             py::arg("options") =
                 geometry::optimization::GraphOfConvexSetsOptions(),
             cls_doc.SolvePath.doc)
+        .def("SolveConvexRestriction", &Class::SolveConvexRestriction,
+            py::arg("active_vertices"),
+            py::arg("options") =
+                geometry::optimization::GraphOfConvexSetsOptions(),
+            cls_doc.SolveConvexRestriction.doc)
         .def("graph_of_convex_sets", &Class::graph_of_convex_sets,
             py_rvp::reference_internal, cls_doc.graph_of_convex_sets.doc)
         .def_static("NormalizeSegmentTimes", &Class::NormalizeSegmentTimes,
             py::arg("trajectory"), cls_doc.NormalizeSegmentTimes.doc);
   }
+
+  m.def("GetContinuousRevoluteJointIndices", &GetContinuousRevoluteJointIndices,
+      py::arg("plant"), doc.GetContinuousRevoluteJointIndices.doc);
 }
 
 }  // namespace internal

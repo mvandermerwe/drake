@@ -1,6 +1,7 @@
 #pragma once
 
-/** @file Provides utilities for writing images to disk.
+/** @file
+ Provides utilities for writing images to disk.
 
  This file provides two sets of utilities: stand alone methods that can be
  invoked in any context and a System that can be connected into a diagram to
@@ -32,6 +33,8 @@ namespace sensors {
  writability, correspondence with image type, etc.) It relies on the caller to
  have done so.  */
 //@{
+
+// TODO(jwnimmer-tri) Deprecate these in favor of the full-fledged ImageIo.
 
 /** Writes the color (8-bit, RGBA) image data to disk.  */
 void SaveToPng(const ImageRgba8U& image, const std::string& file_path);

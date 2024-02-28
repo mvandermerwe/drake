@@ -24,7 +24,6 @@ using drake::geometry::GeometryId;
 using drake::geometry::PenetrationAsPointPair;
 using drake::math::RigidTransform;
 using drake::math::RotationMatrix;
-using drake::multibody::contact_solvers::internal::ContactConfiguration;
 using drake::multibody::contact_solvers::internal::ContactSolverResults;
 using drake::multibody::contact_solvers::internal::MatrixBlock;
 using drake::multibody::internal::DiscreteContactPair;
@@ -39,9 +38,9 @@ template <typename T>
 AccelerationsDueNonConstraintForcesCache<
     T>::AccelerationsDueNonConstraintForcesCache(const MultibodyTreeTopology&
                                                      topology)
-    : forces(topology.num_bodies(), topology.num_velocities()),
+    : forces(topology.num_rigid_bodies(), topology.num_velocities()),
       abic(topology),
-      Zb_Bo_W(topology.num_bodies()),
+      Zb_Bo_W(topology.num_rigid_bodies()),
       aba_forces(topology),
       ac(topology) {}
 

@@ -12,7 +12,6 @@ import numpy as np
 from pydrake.autodiffutils import AutoDiffXd
 from pydrake.common import RandomGenerator
 from pydrake.common.test_utilities import numpy_compare
-from pydrake.common.test_utilities.deprecation import catch_drake_warnings
 from pydrake.common.value import AbstractValue, Value
 from pydrake.examples import PendulumPlant, RimlessWheel
 from pydrake.symbolic import Expression
@@ -36,7 +35,6 @@ from pydrake.systems.framework import (
     DiscreteValues, DiscreteValues_,
     Event, Event_,
     EventStatus,
-    GenerateHtml,
     InputPort, InputPort_,
     InputPortIndex,
     kUseDefaultName,
@@ -302,6 +300,7 @@ class TestGeneral(unittest.TestCase):
         self.assertTrue(copy.copy(periodic_data) is not periodic_data)
         is_diff_eq, period = system1.IsDifferenceEquationSystem()
         self.assertTrue(is_diff_eq)
+        self.assertFalse(system1.IsDifferentialEquationSystem())
         self.assertEqual(period, periodic_data.period_sec())
         context = system1.CreateDefaultContext()
         system1.get_input_port(0).FixValue(context, 0.0)
@@ -315,6 +314,7 @@ class TestGeneral(unittest.TestCase):
         self.assertIsNone(periodic_data)
         is_diff_eq, period = system2.IsDifferenceEquationSystem()
         self.assertFalse(is_diff_eq)
+        self.assertTrue(system2.IsDifferentialEquationSystem())
 
     def test_continuous_state_api(self):
         self.assertEqual(ContinuousState().size(), 0)
@@ -841,12 +841,6 @@ class TestGeneral(unittest.TestCase):
             status.KeepMoreSevere(candidate=status), EventStatus)
         status = EventStatus.Failed(system=system, message="failed")
         self.assertIsInstance(status, EventStatus)
-
-    def test_generate_html(self):
-        system = ZeroOrderHold(period_sec=0.1, vector_size=1)
-        system.set_name("zoh")
-        with catch_drake_warnings(expected_count=1):
-            GenerateHtml(system, initial_depth=2)
 
     def test_diagram_builder_remove(self):
         builder = DiagramBuilder()

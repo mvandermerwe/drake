@@ -356,8 +356,8 @@ TEST_F(SystemTest, VelocityConfigurationDerivativeSizeMismatch) {
                std::runtime_error);
 }
 
-// Tests that the default DoPublish is invoked when no other handler is
-// registered in DoCalcNextUpdateTime.
+// Tests that default publishing is invoked when no other handler is registered
+// in DoCalcNextUpdateTime.
 TEST_F(SystemTest, DiscretePublish) {
   context_->SetTime(5.0);
   auto event_info = system_.AllocateCompositeEventCollection();
@@ -646,6 +646,14 @@ TEST_F(SystemTest, IsDifferenceEquationSystem) {
   EXPECT_FALSE(system_.IsDifferenceEquationSystem(&period));
   // Confirm that the return parameter was not changed.
   EXPECT_EQ(period, 1.23);
+}
+
+// Tests IsDifferentialEquationSystem works for this one System.  Additional
+// test coverage is provided in linear_system_test.cc and diagram_test.cc.
+TEST_F(SystemTest, IsDifferentialEquationSystem) {
+  EXPECT_TRUE(system_.IsDifferentialEquationSystem());
+  system_.AddAbstractInputPort();
+  EXPECT_FALSE(system_.IsDifferentialEquationSystem());
 }
 
 template <typename T>

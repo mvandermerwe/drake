@@ -18,6 +18,7 @@ build --repository_cache=/var/cache/bazel/repository_cache
 build --repo_env=DRAKE_OS=manylinux
 build --repo_env=SNOPT_PATH=git
 build --config=packaging
+build --define=LCM_INSTALL_JAVA=OFF
 EOF
 
 # Install Drake using our wheel-build-specific Python interpreter.

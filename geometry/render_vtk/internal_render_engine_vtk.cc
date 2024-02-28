@@ -9,15 +9,19 @@
 #include <utility>
 
 // To ease build system upkeep, we annotate VTK includes with their deps.
-#include <vtkActor.h>                    // vtkRenderingCore
+#include <vtkAutoInit.h>                 // vtkCommonCore
 #include <vtkCamera.h>                   // vtkRenderingCore
+#include <vtkCameraPass.h>               // vtkRenderingOpenGL2
 #include <vtkCylinderSource.h>           // vtkFiltersSources
 #include <vtkGLTFImporter.h>             // vtkIOImport
 #include <vtkHDRReader.h>                // vtkIOImage
 #include <vtkImageCast.h>                // vtkImagingCore
-#include <vtkImageFlip.h>                // vtkImagingCore
 #include <vtkImageReader2.h>             // vtkIOImage
 #include <vtkImageReader2Factory.h>      // vtkIOImage
+#include <vtkLight.h>                    // vtkRenderingCore
+#include <vtkLightsPass.h>               // vtkRenderingOpenGL2
+#include <vtkOpaquePass.h>               // vtkRenderingOpenGL2
+#include <vtkOpenGLFXAAPass.h>           // vtkRenderingOpenGL2
 #include <vtkOpenGLPolyDataMapper.h>     // vtkRenderingOpenGL2
 #include <vtkOpenGLRenderer.h>           // vtkRenderingOpenGL2
 #include <vtkOpenGLShaderProperty.h>     // vtkRenderingOpenGL2
@@ -25,11 +29,17 @@
 #include <vtkPNGReader.h>                // vtkIOImage
 #include <vtkPlaneSource.h>              // vtkFiltersSources
 #include <vtkProperty.h>                 // vtkRenderingCore
+#include <vtkRenderPassCollection.h>     // vtkRenderingOpenGL2
+#include <vtkSequencePass.h>             // vtkRenderingOpenGL2
+#include <vtkShadowMapBakerPass.h>       // vtkRenderingOpenGL2
+#include <vtkShadowMapPass.h>            // vtkRenderingOpenGL2
 #include <vtkSkybox.h>                   // vtkRenderingCore
 #include <vtkTexture.h>                  // vtkRenderingCore
 #include <vtkTexturedSphereSource.h>     // vtkFiltersSources
+#include <vtkToneMappingPass.h>          // vtkRenderingCore
 #include <vtkTransform.h>                // vtkCommonTransforms
 #include <vtkTransformPolyDataFilter.h>  // vtkFiltersGeneral
+#include <vtkTranslucentPass.h>          // vtkRenderingCore
 
 #include "drake/common/diagnostic_policy.h"
 #include "drake/common/text_logging.h"
@@ -38,8 +48,10 @@
 #include "drake/geometry/render_vtk/internal_render_engine_vtk_base.h"
 #include "drake/geometry/render_vtk/internal_vtk_util.h"
 #include "drake/math/rotation_matrix.h"
-#include "drake/systems/sensors/color_palette.h"
 #include "drake/systems/sensors/vtk_diagnostic_event_observer.h"
+
+// This enables VTK's OpenGL2 infrastructure.
+VTK_MODULE_INIT(vtkRenderingOpenGL2)
 
 namespace drake {
 namespace geometry {
@@ -63,8 +75,6 @@ using render::RenderEngine;
 using render::RenderLabel;
 using std::make_unique;
 using systems::sensors::CameraInfo;
-using systems::sensors::ColorD;
-using systems::sensors::ColorI;
 using systems::sensors::ImageDepth32F;
 using systems::sensors::ImageLabel16I;
 using systems::sensors::ImageRgba8U;
@@ -160,10 +170,7 @@ ShaderCallback::ShaderCallback()
 vtkNew<ShaderCallback> RenderEngineVtk::uniform_setting_callback_;
 
 RenderEngineVtk::RenderEngineVtk(const RenderEngineVtkParams& parameters)
-    : RenderEngine(  // TODO(jwnimmer-tri) Upon deprecation removal of the
-                     // default_label on 2023-12-01, we should hard-code the
-                     // kDontCare here, instead of using value_or().
-          parameters.default_label.value_or(RenderLabel::kDontCare)),
+    : RenderEngine(RenderLabel::kDontCare),
       parameters_(parameters),
       pipelines_{{make_unique<RenderingPipeline>(),
                   make_unique<RenderingPipeline>(),
@@ -176,17 +183,10 @@ RenderEngineVtk::RenderEngineVtk(const RenderEngineVtkParams& parameters)
       parameters.environment_map->texture.index() == 0) {
     fallback_lights_.push_back({});
   }
-  if (parameters.default_label.has_value()) {
-    static const drake::internal::WarnDeprecated warn_once(
-        "2023-12-01",
-        "RenderEngineVtk(): the default_label option is deprecated.");
-  }
   if (parameters.default_diffuse) {
     default_diffuse_.set(*parameters.default_diffuse);
   }
-
-  const auto& c = parameters.default_clear_color;
-  default_clear_color_ = ColorD{c(0), c(1), c(2)};
+  default_clear_color_.set(parameters.default_clear_color);
 
   InitializePipelines();
 }
@@ -305,15 +305,103 @@ std::unique_ptr<RenderEngine> RenderEngineVtk::DoClone() const {
   return std::unique_ptr<RenderEngineVtk>(new RenderEngineVtk(*this));
 }
 
+namespace {
+
+/* The shadow camera is basically the same as the render camera, except it's
+ square. We do this to accommodate a bug in VTK in which shadows get mangled
+ when the render window isn't square. See
+ https://discourse.vtk.org/t/detailed-analysis-of-shadows-for-rectangular-render-windows/12912
+ However, we want to extract the original render image from the square
+ rendering. To do this, we *push* the desired render image into the corner of
+ the render window such that we can simply extract the block of pixel data from
+ VTK's image exporter of the expected size without worrying about offsets.
+
+ If the input `camera` has a vertical aspect ratio, we don't have to do anything
+ special; it automatically gets pushed into the corner. If the input `camera`
+ has a horizontal aspect ratio, we need to shift the camera's center point by
+ the amount we've padded to make sure our desired image is in the correct
+ corner.
+
+ If `active_shadow` is false, we use the original camera. */
+ColorRenderCamera MakeShadowCamera(const ColorRenderCamera& camera,
+                                   bool active_shadow) {
+  if (!active_shadow) {
+    return camera;
+  }
+  const RenderCameraCore& core = camera.core();
+  const CameraInfo& intrinsics = core.intrinsics();
+  const int w = intrinsics.width();
+  const int h = intrinsics.height();
+
+  if (w == h) {
+    return camera;
+  }
+
+  const int size = std::max(w, h);
+  const int delta = std::abs(w - h);
+  const double y_offset = (w > h) ? delta : 0.0;
+
+  return ColorRenderCamera{
+      {core.renderer_name(),
+       {size, size, intrinsics.focal_x(), intrinsics.focal_y(),
+        intrinsics.center_x(), intrinsics.center_y() + y_offset},
+       core.clipping(),
+       core.sensor_pose_in_camera_body()},
+      camera.show_window()};
+}
+
+/* Writes an image from the data stored in `exporter` to `color_image_out`. Not
+ all of the data in exporter is necessarily used. The portion used starts at
+ the (0, 0) pixel and extends to (w, h), where w and h are the width and height
+ of `vtk_camera`.
+
+ @pre `color_image_out` has the same dimensions as `vtk_camera`.
+ @pre `exporter`'s image data is at least as large as `color_image_out`. */
+void ExtractImage(const ColorRenderCamera& vtk_camera, vtkImageExport* exporter,
+                  ImageRgba8U* color_image_out) {
+  // Remember that the image has been structured such that we can read a block
+  // starting in the corner; so we don't have to offset which row we start from
+  // or from any column but the first.
+
+  // We know by construction that the pixel size in the vtk data is the same as
+  // the output image.
+  const int vtk_row_bytes =
+      vtk_camera.core().intrinsics().width() * color_image_out->kPixelSize;
+  auto* vtk_ptr = static_cast<ImageRgba8U::T*>(exporter->GetPointerToData());
+
+  const int out_row_bytes =
+      color_image_out->width() * color_image_out->kPixelSize;
+  // We flip the image vertically; row 0 in VTK is row H - 1 in the image.
+  // We want the pointer to point at the *start* of the row H - 1.
+  int start_out_row = color_image_out->height() - 1;
+  ImageRgba8U::T* out_ptr =
+      color_image_out->at(0, 0) + start_out_row * out_row_bytes;
+
+  // Now copy the rows.
+  for (int row = 0; row < color_image_out->height(); ++row) {
+    memcpy(out_ptr, vtk_ptr, out_row_bytes);
+    out_ptr -= out_row_bytes;  // We move backwards through the output data.
+    vtk_ptr += vtk_row_bytes;  // We move forwards through the input data.
+  }
+}
+
+}  // namespace
+
 void RenderEngineVtk::DoRenderColorImage(const ColorRenderCamera& camera,
                                          ImageRgba8U* color_image_out) const {
-  UpdateWindow(camera.core(), camera.show_window(),
+  const ColorRenderCamera shadow_camera =
+      MakeShadowCamera(camera, parameters_.cast_shadows);
+
+  UpdateWindow(shadow_camera.core(), shadow_camera.show_window(),
                *pipelines_[ImageType::kColor], "Color Image");
   PerformVtkUpdate(*pipelines_[ImageType::kColor]);
 
-  // TODO(SeanCurtis-TRI): Determine if this copies memory (and find some way
-  // around copying).
-  pipelines_[ImageType::kColor]->exporter->Export(color_image_out->at(0, 0));
+  // TODO(SeanCurtis-TRI): When the VTK square-window-shadow bug is resolved,
+  // render from the original camera (instead of the shadow_camera) and replace
+  // the call to ExtractImage with a simple invocation of:
+  // pipelines_[ImageType::kColor]->exporter->Export(color_image_out->at(0, 0));
+  ExtractImage(shadow_camera, pipelines_[ImageType::kColor]->exporter,
+               color_image_out);
 }
 
 void RenderEngineVtk::DoRenderDepthImage(const DepthRenderCamera& camera,
@@ -369,13 +457,10 @@ void RenderEngineVtk::DoRenderLabelImage(const ColorRenderCamera& camera,
   ImageRgba8U image(intrinsics.width(), intrinsics.height());
   pipelines_[ImageType::kLabel]->exporter->Export(image.at(0, 0));
 
-  ColorI color;
   for (int v = 0; v < intrinsics.height(); ++v) {
     for (int u = 0; u < intrinsics.width(); ++u) {
-      color.r = image.at(u, v)[0];
-      color.g = image.at(u, v)[1];
-      color.b = image.at(u, v)[2];
-      label_image_out->at(u, v)[0] = RenderEngine::LabelFromColor(color);
+      label_image_out->at(u, v)[0] = RenderEngine::MakeLabelFromRgb(
+          image.at(u, v)[0], image.at(u, v)[1], image.at(u, v)[2]);
     }
   }
 }
@@ -467,6 +552,8 @@ bool RenderEngineVtk::ImplementObj(const std::string& file_name, double scale,
 
 bool RenderEngineVtk::ImplementGltf(const std::string& file_name, double scale,
                                     const RegistrationData& data) {
+  // TODO(SeanCurtis-TRI): introduce VtkDiagnosticEventObserver on the gltf
+  // importer (see systems/sensors/image_io_load.cc).
   vtkNew<vtkGLTFImporter> importer;
   importer->SetFileName(file_name.c_str());
   importer->Update();
@@ -501,7 +588,7 @@ bool RenderEngineVtk::ImplementGltf(const std::string& file_name, double scale,
   }
 
   const RenderLabel label = GetRenderLabelOrThrow(data.properties);
-  const ColorD label_color = RenderEngine::GetColorDFromLabel(label);
+  const Rgba label_color = RenderEngine::MakeRgbFromLabel(label);
 
   // The final assemblies associated with the GeometryId.
   PropArray prop_array;
@@ -518,14 +605,13 @@ bool RenderEngineVtk::ImplementGltf(const std::string& file_name, double scale,
     actors->InitTraversal();
     // For each source_actor, create a color, depth, and label actor.
     while (vtkActor* source_actor = actors->GetNextActor()) {
-      vtkSmartPointer<vtkActor> part_actor;
+      vtkNew<vtkActor> part_actor;
       if (i == ImageType::kColor) {
         // Color rendering can use the source_actor without changes.
-        part_actor = source_actor;
+        part_actor->ShallowCopy(source_actor);
       } else {
         // Depth and label images require new actors, based on the source, but
         // with changes to their materials (aka "mapper").
-        part_actor = vtkNew<vtkActor>();
         vtkNew<vtkOpenGLPolyDataMapper> mapper;
         part_actor->SetMapper(mapper);
         mapper->SetInputConnection(
@@ -533,8 +619,8 @@ bool RenderEngineVtk::ImplementGltf(const std::string& file_name, double scale,
         if (i == ImageType::kLabel) {
           // Label requires a mapper with the encoded RenderLabel color.
           part_actor->GetProperty()->LightingOff();
-          part_actor->GetProperty()->SetColor(label_color.r, label_color.g,
-                                              label_color.b);
+          part_actor->GetProperty()->SetColor(label_color.r(), label_color.g(),
+                                              label_color.b());
         } else if (i == ImageType::kDepth) {
           // Depth requires a mapper with the depth shader.
           vtkOpenGLShaderProperty* shader_prop =
@@ -597,23 +683,24 @@ vtkSmartPointer<vtkLight> MakeVtkLight(const LightParameter& light_param) {
     }
   }
   if (light_param.frame == "camera") {
-    // LightParameter has the camera located at Co looking in the +Cz direction.
-    // VTK has camera positioned at p_DC = <0, 0, 1> in the device frame D,
-    // looking in the -Dz direction. So, we need to translate p_CL to p_DL by
-    // negating the z-value and offsetting it by p_DC. We need to treat the
-    // light direction similarly.
+    // Drake's camera frame C has the camera looking in the Cz direction (with
+    // Cx pointing right in the image and Cy down). The light parameters are
+    // expressed in that frame. VTK's camera frame V relates to C as follows:
+    // Cx = Vx, Cy = -Vy, and Cz = -Vz, with p_CoVo_V = Vz (i.e., [0, 0, 1]).
+    // We need to configure the lights in VTK's frame V.
     const Vector3d& p_CL_C = light_param.position;
-    const Vector3d p_CL_D(p_CL_C.x(), p_CL_C.y(), -p_CL_C.z() + 1);
+    const Vector3d p_CL_D(p_CL_C.x(), -p_CL_C.y(), -p_CL_C.z() + 1);
     light->SetPosition(p_CL_D.data());
-    const Vector3d& dir_LT_C = light_param.direction;
-    const Vector3d& dir_LT_D{dir_LT_C.x(), dir_LT_C.y(), -dir_LT_C.z()};
-    const Vector3d p_CT = p_CL_D + dir_LT_D;
+    const Vector3d& dir_LT_C = light_param.direction.normalized();
+    const Vector3d& dir_LT_D{dir_LT_C.x(), -dir_LT_C.y(), -dir_LT_C.z()};
+    const Vector3d p_CT_D = p_CL_D + dir_LT_D;
     // Setting the focal point on a point light is harmless.
-    light->SetFocalPoint(p_CT.data());
+    light->SetFocalPoint(p_CT_D.data());
     light->SetLightTypeToCameraLight();
   } else if (light_param.frame == "world") {
     light->SetPosition(light_param.position.data());
-    const Vector3d p_WT = light_param.position + light_param.direction;
+    const Vector3d p_WT =
+        light_param.position + light_param.direction.normalized();
     light->SetFocalPoint(p_WT.data());
     light->SetLightTypeToSceneLight();
   } else {
@@ -687,17 +774,15 @@ void RenderEngineVtk::InitializePipelines() {
   // distance (e.g., infinity).
   pipelines_[ImageType::kDepth]->renderer->SetBackground(1., 1., 1.);
 
-  const ColorD empty_color =
-      RenderEngine::GetColorDFromLabel(RenderLabel::kEmpty);
+  const Rgba empty_color = RenderEngine::MakeRgbFromLabel(RenderLabel::kEmpty);
   pipelines_[ImageType::kLabel]->renderer->SetBackground(
-      empty_color.r, empty_color.g, empty_color.b);
+      empty_color.r(), empty_color.g(), empty_color.b());
 
   vtkOpenGLRenderer* renderer =
       vtkOpenGLRenderer::SafeDownCast(pipelines_[ImageType::kColor]->renderer);
   renderer->SetUseDepthPeeling(1);
-  renderer->UseFXAAOn();
-  renderer->SetBackground(default_clear_color_.r, default_clear_color_.g,
-                          default_clear_color_.b);
+  renderer->SetBackground(default_clear_color_.r(), default_clear_color_.g(),
+                          default_clear_color_.b());
   renderer->SetBackgroundAlpha(1.0);
   // The only lights we add are this renderer's "active" lights.
   renderer->RemoveAllLights();
@@ -705,6 +790,7 @@ void RenderEngineVtk::InitializePipelines() {
   for (const auto& light_param : active_lights()) {
     renderer->AddLight(MakeVtkLight(light_param));
   }
+  // Environment map.
   if (parameters_.environment_map.has_value()) {
     // Until we have a CubeMap, the zero-index represents the default value of
     // "no texture specified". So, we'll simply return.
@@ -738,6 +824,64 @@ void RenderEngineVtk::InitializePipelines() {
     // Setting an environment map should require all materials to be PBR.
     SetPbrMaterials();
   }
+
+  // The pass sequence that handles lights, opaque, and transparent objects.
+  vtkNew<vtkSequencePass> full_seq;
+  vtkNew<vtkRenderPassCollection> full_passes;
+  full_passes->AddItem(vtkNew<vtkLightsPass>());
+  full_passes->AddItem(vtkNew<vtkOpaquePass>());
+  full_passes->AddItem(vtkNew<vtkTranslucentPass>());
+  full_seq->SetPasses(full_passes);
+
+  // Shadows.
+  vtkSmartPointer<vtkSequencePass> camera_seq{};
+  if (parameters_.cast_shadows) {
+    // If shadows are active, the full sequence gets embedded into a shadow
+    // map pass so opaque can cast shadows, and opaque and transparent objects
+    // can receive shadows.
+    vtkNew<vtkRenderPassCollection> passes;
+    vtkNew<vtkShadowMapPass> shadows;
+    passes->AddItem(shadows->GetShadowMapBakerPass());
+    shadows->GetShadowMapBakerPass()->SetResolution(
+        parameters_.shadow_map_size);
+    // The shadow map pass gets the full render sequence so that we get opaque
+    // and transparent objects included in shadows.
+    shadows->SetOpaqueSequence(full_seq);
+    passes->AddItem(shadows);
+    camera_seq = vtkNew<vtkSequencePass>();
+    camera_seq->SetPasses(passes);
+  } else {
+    // If we don't have shadows, then the full sequence is all that matters.
+    camera_seq = full_seq;
+  }
+
+  vtkNew<vtkCameraPass> camera_pass;
+  camera_pass->SetDelegatePass(camera_seq);
+
+  vtkSmartPointer<vtkRenderPass> render_pass = camera_pass;
+
+  // Only apply tone-mapping if requested. Applying tone mapping, even with
+  // an exposure of 1, will still effect the rendered output. Omitting exposure
+  // provides the legacy images that RenderEngineVtk historically produced.
+  if (parameters_.exposure.has_value()) {
+    vtkNew<vtkToneMappingPass> tone_mapping_pass;
+    tone_mapping_pass->SetToneMappingType(vtkToneMappingPass::GenericFilmic);
+    tone_mapping_pass->SetGenericFilmicUncharted2Presets();
+    tone_mapping_pass->SetExposure(
+        static_cast<float>(parameters_.exposure.value()));
+    tone_mapping_pass->SetDelegatePass(camera_pass);
+    render_pass = tone_mapping_pass;
+  }
+  // When we specify the render passes, we must add the FXAA render pass
+  // explicitly; the render setting connected to fixed pipeline no longer has
+  // any effect.
+  // TODO(SeanCurtis-TRI) We might consider SSAA (vtkSSAAPass) as providing
+  // superior smoothing, but at the cost of having to render more pixels (it
+  // renders a large image and then down samples it). Perhaps make this
+  // available as a render engine setting.
+  vtkNew<vtkOpenGLFXAAPass> fxaa_pass;
+  fxaa_pass->SetDelegatePass(render_pass);
+  renderer->SetPass(fxaa_pass);
 }
 
 void RenderEngineVtk::ImplementPolyData(vtkPolyDataAlgorithm* source,
@@ -786,8 +930,8 @@ void RenderEngineVtk::ImplementPolyData(vtkPolyDataAlgorithm* source,
     // This is to disable shadows and to get an object painted with a single
     // color.
     label_actor->GetProperty()->LightingOff();
-    const auto color = RenderEngine::GetColorDFromLabel(label);
-    label_actor->GetProperty()->SetColor(color.r, color.g, color.b);
+    const Rgba color = RenderEngine::MakeRgbFromLabel(label);
+    label_actor->GetProperty()->SetColor(color.r(), color.g(), color.b());
     connect_actor(ImageType::kLabel);
   }
 
@@ -822,7 +966,12 @@ void RenderEngineVtk::ImplementPolyData(vtkPolyDataAlgorithm* source,
     const bool need_repeat = uv_scale[0] > 1 || uv_scale[1] > 1;
     texture->SetRepeat(need_repeat);
     texture->InterpolateOn();
-    color_actor->SetTexture(texture.Get());
+    if (use_pbr_materials_) {
+      texture->SetUseSRGBColorSpace(true);
+      color_actor->GetProperty()->SetBaseColorTexture(texture);
+    } else {
+      color_actor->SetTexture(texture.Get());
+    }
   }
 
   // Note: This allows the color map to be modulated by an arbitrary diffuse
@@ -868,6 +1017,16 @@ void RenderEngineVtk::SetPbrMaterials() {
     for (auto& [_, prop_array] : props_) {
       for (auto& part : prop_array[ImageType::kColor].parts) {
         part.actor->GetProperty()->SetInterpolationToPBR();
+        if (part.actor->GetTexture() != nullptr &&
+            part.actor->GetProperty()->GetTexture("albedoTex") == nullptr) {
+          // Phong lighting uses the generic vtkActor "texture". PBR lighting
+          // uses the "albedoTex" (sRGB) texture. We should promote the texture
+          // as well.
+          vtkTexture* texture = part.actor->GetTexture();
+          texture->SetUseSRGBColorSpace(true);
+          part.actor->GetProperty()->SetBaseColorTexture(
+              part.actor->GetTexture());
+        }
       }
     }
   }

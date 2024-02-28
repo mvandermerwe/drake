@@ -11,6 +11,7 @@
 #include "drake/common/drake_copyable.h"
 #include "drake/common/name_value.h"
 #include "drake/geometry/meshcat_animation.h"
+#include "drake/geometry/meshcat_params.h"
 #include "drake/geometry/proximity/triangle_surface_mesh.h"
 #include "drake/geometry/rgba.h"
 #include "drake/geometry/shape_specification.h"
@@ -20,52 +21,6 @@
 
 namespace drake {
 namespace geometry {
-
-/** The set of parameters for configuring Meshcat. */
-struct MeshcatParams {
-  /** Passes this object to an Archive.
-  Refer to @ref yaml_serialization "YAML Serialization" for background. */
-  template <typename Archive>
-  void Serialize(Archive* a) {
-    a->Visit(DRAKE_NVP(host));
-    a->Visit(DRAKE_NVP(port));
-    a->Visit(DRAKE_NVP(web_url_pattern));
-    a->Visit(DRAKE_NVP(show_stats_plot));
-  }
-
-  /** Meshcat will listen only on the given hostname (e.g., "localhost").
-  If "*" is specified, then it will listen on all interfaces.
-  If empty, an appropriate default value will be chosen (currently "*"). */
-  std::string host{"*"};
-
-  /** Meshcat will listen on the given http `port`. If no port is specified,
-  then it will listen on the first available port starting at 7000 (up to 7999).
-  If port 0 is specified, it will listen on an arbitrary "ephemeral" port.
-  @pre We require `port` == 0 || `port` >= 1024. */
-  std::optional<int> port{std::nullopt};
-
-  /** The `web_url_pattern` may be used to change the web_url() (and therefore
-  the ws_url()) reported by Meshcat. This may be useful in case %Meshcat sits
-  behind a firewall or proxy.
-
-  The pattern follows the
-  <a href="https://en.cppreference.com/w/cpp/utility/format">std::format</a>
-  specification language, except that `arg-id` substitutions are performed
-  using named arguments instead of positional indices.
-
-  There are two arguments available to the pattern:
-  - `{port}` will be substituted with the %Meshcat server's listen port number;
-  - `{host}` will be substituted with this params structure's `host` field, or
-    else with "localhost" in case the `host` was one of the placeholders for
-    "all interfaces".
-  */
-  std::string web_url_pattern{"http://{host}:{port}"};
-
-  /** Determines whether or not to display the stats plot widget in the Meshcat
-  user interface. This plot including realtime rate and WebGL render
-  statistics. */
-  bool show_stats_plot{true};
-};
 
 /** Provides an interface to %Meshcat (https://github.com/meshcat-dev/meshcat).
 
@@ -157,8 +112,13 @@ Some notes on using the AR/VR modes:
 
 If you do not have AR/VR hardware, you can use an emulator in your browser to
 experiment with the mode. Use an browser plugin like WebXR API Emulator (i.e.,
-for [Chrome](https://chrome.google.com/webstore/detail/webxr-api-emulator/mjddjgeghkdijejnciaefnkjmkafnnje)
-or [Firefox](https://addons.mozilla.org/en-US/firefox/addon/webxr-api-emulator/)).
+for
+[Chrome](https://chrome.google.com/webstore/detail/webxr-api-emulator/mjddjgeghkdijejnciaefnkjmkafnnje)
+or
+[Firefox](https://addons.mozilla.org/en-US/firefox/addon/webxr-api-emulator/)).
+
+The AR/VR mode is not currently supported in offline mode (i.e., when saving as
+StaticHtml()).
 
 @section network_access Network access
 
@@ -505,6 +465,36 @@ class Meshcat {
   void SetCameraPose(const Eigen::Vector3d& camera_in_world,
                      const Eigen::Vector3d& target_in_world);
 
+  /** Returns the most recently received camera pose.
+
+   A meshcat browser session can be configured to transmit its camera pose.
+   It is enabled by appending a url parameter. For example, if the url for the
+   meshcat server is:
+
+       http://localhost:7000
+
+   A particular browser can be configured to transmit its camera pose back to
+   Drake by supplying the following url:
+
+       http://localhost:7000/?tracked_camera=on
+
+   It is possible to use that URL in multiple browsers simultaneously. A
+   particular view will only transmit its camera position when its camera
+   position actually *changes*. As such, the returned camera pose will reflect
+   the pose of the camera from that most-recently manipulated browser.
+
+   std::nullopt is returned if:
+
+     - No meshcat session has transmitted its camera pose.
+     - The meshcat session that last transmitted its pose is no longer
+       connected.
+     - The meshcat session transmitting has an orthographic camera.
+
+  <!-- Note to developer. This logic is tested in the python test
+   meshcat_camera_tracking_test.py. -->
+   */
+  std::optional<math::RigidTransformd> GetTrackedCameraPose() const;
+
   // TODO(SeanCurtis-TRI): Consider the API:
   //  void SetCameraPose(const RigidTransformd& X_WC, bool target_distance = 1);
   // We'll have to confirm that picking arbitrary rotations R_WC doesn't
@@ -826,7 +816,10 @@ class Meshcat {
   way to save and share your 3D content.
 
   Note that controls (e.g. sliders and buttons) are not included in the HTML
-  output, because their usefulness relies on a connection to the server. */
+  output, because their usefulness relies on a connection to the server.
+
+  You can also use your browser to download this file, by typing "/download"
+  on the end of the URL (i.e., accessing `web_url() + "/download"`). */
   std::string StaticHtml();
 
   /** Sets a flag indicating that subsequent calls to SetTransform and
@@ -843,7 +836,7 @@ class Meshcat {
   the visualizer immediately (because meshcat animations do not support
   SetObject).
   */
-  void StartRecording(double frames_per_second = 32.0,
+  void StartRecording(double frames_per_second = 64.0,
                       bool set_visualizations_while_recording = true);
 
   /** Sets a flag to pause/stop recording.  When stopped, publish events will
