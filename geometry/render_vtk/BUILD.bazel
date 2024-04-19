@@ -1,10 +1,11 @@
+load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
+load("//tools/lint:lint.bzl", "add_lint_tests")
 load(
     "//tools/skylark:drake_cc.bzl",
     "drake_cc_googletest",
     "drake_cc_library",
     "drake_cc_package_library",
 )
-load("//tools/lint:lint.bzl", "add_lint_tests")
 load("//tools/skylark:test_tags.bzl", "vtk_test_tags")
 
 package(default_visibility = ["//visibility:private"])
@@ -26,6 +27,7 @@ drake_cc_library(
     deps = [
         "//common:essential",
         "//common:name_value",
+        "//common:string_container",
         "//geometry/render:light_parameter",
         "//geometry/render:render_label",
     ],
@@ -57,7 +59,10 @@ drake_cc_library(
         ":internal_render_engine_vtk_base",
         ":internal_vtk_util",
         "//common",
+        "//geometry:vtk_opengl_init",
+        "//geometry/proximity:polygon_to_triangle_mesh",
         "//geometry/render:render_engine",
+        "//geometry/render:render_mesh",
         "//geometry/render/shaders:depth_shaders",
         "//geometry/render_vtk:render_engine_vtk_params",
         "//systems/sensors:color_palette",
@@ -132,6 +137,7 @@ drake_cc_googletest(
         ":test/whole_image_default_color.png",
         ":test/whole_image_default_depth.png",
         ":test/whole_image_default_label.png",
+        "//examples/scene_graph:models",
         "//geometry:environment_maps",
         "//geometry/render:test_models",
     ],
@@ -199,10 +205,35 @@ genrule(
     visibility = ["//visibility:private"],
 )
 
+PYRAMID_RESOURCES = [
+    "fully_textured_pyramid_base_color.png",
+    "fully_textured_pyramid.bin",
+    "fully_textured_pyramid_emissive.png",
+    "fully_textured_pyramid.gltf",
+    "fully_textured_pyramid_normal.png",
+    "fully_textured_pyramid_omr.png",
+    "fully_textured_pyramid.sdf",
+]
+
+[
+    copy_file(
+        name = "_copy_" + x,
+        src = "//geometry/render:test/meshes/" + x,
+        out = "test/" + x,
+        allow_symlink = True,
+    )
+    for x in PYRAMID_RESOURCES
+]
+
 filegroup(
     name = "patch_test_models",
     testonly = 1,
-    srcs = [":gltf_pyramid_no_color_texture"],
+    srcs = [
+        ":gltf_pyramid_no_color_texture",
+    ] + [
+        ":test/" + x
+        for x in PYRAMID_RESOURCES
+    ],
 )
 
 drake_cc_googletest(

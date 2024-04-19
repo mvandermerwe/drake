@@ -6,6 +6,7 @@
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/common/test_utilities/expect_no_throw.h"
 #include "drake/common/test_utilities/expect_throws_message.h"
+#include "drake/common/trajectories/piecewise_polynomial.h"
 #include "drake/geometry/optimization/geodesic_convexity.h"
 #include "drake/geometry/optimization/graph_of_convex_sets.h"
 #include "drake/geometry/optimization/hpolyhedron.h"
@@ -45,14 +46,14 @@ using multibody::MultibodyPlant;
 using multibody::PlanarJoint;
 using multibody::RevoluteJoint;
 using multibody::RigidBody;
-using multibody::SpatialInertia;
 using solvers::MathematicalProgram;
 
-bool GurobiOrMosekSolverAvailable() {
-  return (solvers::MosekSolver::is_available() &&
-          solvers::MosekSolver::is_enabled()) ||
-         (solvers::GurobiSolver::is_available() &&
-          solvers::GurobiSolver::is_enabled());
+bool GurobiOrMosekSolverUnavailableDuringMemoryCheck() {
+  return (std::getenv("VALGRIND_OPTS") != nullptr) &&
+         !(solvers::MosekSolver::is_available() &&
+           solvers::MosekSolver::is_enabled() &&
+           solvers::GurobiSolver::is_available() &&
+           solvers::GurobiSolver::is_enabled());
 }
 
 GTEST_TEST(GcsTrajectoryOptimizationTest, Basic) {
@@ -71,8 +72,27 @@ GTEST_TEST(GcsTrajectoryOptimizationTest, Basic) {
   auto& source = gcs.AddRegions(MakeConvexSets(Point(start)), 0);
   auto& target = gcs.AddRegions(MakeConvexSets(Point(goal)), 0);
 
-  gcs.AddEdges(source, regions);
-  gcs.AddEdges(regions, target);
+  // Verify that the subgraphs are present in gcs trajectory optimization.
+  auto all_subgraphs = gcs.GetSubgraphs();
+  EXPECT_NE(std::find(all_subgraphs.begin(), all_subgraphs.end(), &regions),
+            all_subgraphs.end());
+  EXPECT_NE(std::find(all_subgraphs.begin(), all_subgraphs.end(), &source),
+            all_subgraphs.end());
+  EXPECT_NE(std::find(all_subgraphs.begin(), all_subgraphs.end(), &target),
+            all_subgraphs.end());
+
+  auto& source_to_regions = gcs.AddEdges(source, regions);
+  auto& regions_to_target = gcs.AddEdges(regions, target);
+
+  // Verify that the edges between subgraphs are present in gcs trajectory
+  // optimization.
+  auto all_subgraph_edges = gcs.GetEdgesBetweenSubgraphs();
+  EXPECT_NE(std::find(all_subgraph_edges.begin(), all_subgraph_edges.end(),
+                      &source_to_regions),
+            all_subgraph_edges.end());
+  EXPECT_NE(std::find(all_subgraph_edges.begin(), all_subgraph_edges.end(),
+                      &regions_to_target),
+            all_subgraph_edges.end());
 
   auto [traj, result] = gcs.SolvePath(source, target);
   EXPECT_TRUE(result.is_success());
@@ -80,6 +100,22 @@ GTEST_TEST(GcsTrajectoryOptimizationTest, Basic) {
   EXPECT_EQ(traj.cols(), 1);
   EXPECT_TRUE(CompareMatrices(traj.value(traj.start_time()), start, 1e-6));
   EXPECT_TRUE(CompareMatrices(traj.value(traj.end_time()), goal, 1e-6));
+
+  // If we would like to find another path for a different goal, we can remove
+  // the target subgraph and add a new one while keeping the remaining graph.
+  gcs.RemoveSubgraph(target);
+  Vector2d new_goal(0.5, -0.5);
+  auto& new_target = gcs.AddRegions(MakeConvexSets(Point(new_goal)), 0);
+  gcs.AddEdges(regions, new_target);
+
+  auto [new_traj, new_result] = gcs.SolvePath(source, new_target);
+  EXPECT_TRUE(new_result.is_success());
+  EXPECT_EQ(new_traj.rows(), 2);
+  EXPECT_EQ(new_traj.cols(), 1);
+  EXPECT_TRUE(
+      CompareMatrices(new_traj.value(new_traj.start_time()), start, 1e-6));
+  EXPECT_TRUE(
+      CompareMatrices(new_traj.value(new_traj.end_time()), new_goal, 1e-6));
 }
 
 GTEST_TEST(GcsTrajectoryOptimizationTest, PathLengthCost) {
@@ -216,10 +252,6 @@ GTEST_TEST(GcsTrajectoryOptimizationTest, MinimumTimeVsPathLength) {
   // Nonregression bound on the complexity of the underlying GCS MICP.
   EXPECT_LE(gcs.EstimateComplexity(), 160);
 
-  if (!GurobiOrMosekSolverAvailable()) {
-    return;
-  }
-
   auto [shortest_path_traj, shortest_path_result] =
       gcs.SolvePath(source, target);
   ASSERT_TRUE(shortest_path_result.is_success());
@@ -337,17 +369,46 @@ GTEST_TEST(GcsTrajectoryOptimizationTest, MinimumTimeVsPathLength) {
   const double fastest_path_duration =
       fastest_path_traj.end_time() - fastest_path_traj.start_time();
   EXPECT_LT(fastest_path_duration, shortest_path_duration);
+
+  // Oh oh, it has been raining a lot! The street has been flooded and Bob
+  // can't take the scooter. We can remove the scooter regions from the graph
+  // and solve the path again.
+  gcs.RemoveSubgraph(scooter_regions);
+
+  auto [rain_path_traj, rain_path_result] = gcs.SolvePath(source, target);
+  EXPECT_TRUE(rain_path_result.is_success());
+  EXPECT_EQ(rain_path_traj.rows(), 2);
+  EXPECT_EQ(rain_path_traj.cols(), 1);
+  EXPECT_TRUE(CompareMatrices(rain_path_traj.value(rain_path_traj.start_time()),
+                              start, 1e-6));
+  EXPECT_TRUE(CompareMatrices(rain_path_traj.value(rain_path_traj.end_time()),
+                              goal, 1e-6));
+
+  // Since the scooter regions have been removed, Bob can only walk through the
+  // through the gravel.
+  std::vector<const geometry::optimization::GraphOfConvexSets::Edge*>
+      expected_walking_path_edges = {
+          walking_regions.Vertices()[0]->incoming_edges()[0],
+          walking_regions.Vertices()[0]->outgoing_edges()[0]};
+
+  std::vector<const geometry::optimization::GraphOfConvexSets::Edge*>
+      rain_path_edges = gcs.graph_of_convex_sets().GetSolutionPath(
+          *source.Vertices()[0], *target.Vertices()[0], rain_path_result, 1.0);
+  for (size_t i = 0; i < rain_path_edges.size(); i++) {
+    EXPECT_EQ(rain_path_edges[i], expected_walking_path_edges[i]);
+  }
 }
 
-GTEST_TEST(GcsTrajectoryOptimizationTest, VelocityBoundsOnEdges) {
-  /* This simple 2D example will test the velocity bound constraints on edges,
+GTEST_TEST(GcsTrajectoryOptimizationTest, DerivativeBoundsOnEdges) {
+  /* This simple 2D example will test the derivative bound constraints on edges,
   and illustrate and example with delays. Bob is a drag racer who wants to beat
   the world record for the 305m strip. No rolling start is allowed, so the car
-  has to have zero velocity in the beginning. However, he can drive as fast as
-  his car allows through the finish line (50 m/s). There is only one problem,
-  this drag strip is known to get crossed by ducks, so Bob has to be careful not
-  to hit any ducks. It takes the ducks about 10 seconds to cross the track, and
-  Bob has to wait for them.
+  has to have zero velocity and acceleration in the beginning. However, he can
+  drive as fast as his car allows through the finish line (50 m/s). His car is
+  electric and deliver infinite torque, thus there are no acceleration limits.
+  There is only one problem, this drag strip is known to get crossed by ducks,
+  so Bob has to be careful not to hit any ducks. It takes the ducks about 10
+  seconds to cross the track, and Bob has to wait for them.
   */
   // clang-format off
   /*    305m                                        75m             🚥
@@ -370,16 +431,16 @@ GTEST_TEST(GcsTrajectoryOptimizationTest, VelocityBoundsOnEdges) {
   // We need to duplicate the race track regions to sandwich the duck regions.
   auto& race_track_1 = gcs.AddRegions(
       MakeConvexSets(HPolyhedron::MakeBox(Vector2d(0, -5), Vector2d(305, 5))),
-      3);
+      5);
   auto& race_track_2 = gcs.AddRegions(
       MakeConvexSets(HPolyhedron::MakeBox(Vector2d(0, -5), Vector2d(305, 5))),
-      3);
+      5);
   // Bob's car can only drive straight. So he can drive at 50 m/s forward in x,
   // but not in y.
   race_track_1.AddVelocityBounds(Vector2d(0, 0), Vector2d(kMaxSpeed, 0));
   race_track_2.AddVelocityBounds(Vector2d(0, 0), Vector2d(kMaxSpeed, 0));
 
-  // The ducks are cross the track at the 75m mark and they need at least 10
+  // The ducks are crossing the track at the 75m mark and they need at least 10
   // seconds.
   auto& ducks = gcs.AddRegions(
       MakeConvexSets(HPolyhedron::MakeBox(Vector2d(75, -5), Vector2d(75, 5))),
@@ -393,23 +454,25 @@ GTEST_TEST(GcsTrajectoryOptimizationTest, VelocityBoundsOnEdges) {
   auto& ducks_to_race_track_2 = gcs.AddEdges(ducks, race_track_2);
   gcs.AddEdges(race_track_2, target);
 
-  // Bob's car has to start with zero velocity.
-  source_to_race_track_1.AddVelocityBounds(Vector2d(0, 0), Vector2d(0, 0));
+  // Bob's car has to start with zero velocity and acceleration.
+  source_to_race_track_1.AddZeroDerivativeConstraints(1);
+  source_to_race_track_1.AddZeroDerivativeConstraints(2);
 
   // Bob doesn't want to run the ducks over, so he has to stop before the ducks.
-  // Hence the car will be at zero velocity.
+  // Hence the car will be at zero velocity. Another way to add the constraint
+  // is by setting the velocity bounds to zero.
   race_track_1_to_ducks.AddVelocityBounds(Vector2d(0, 0), Vector2d(0, 0));
   ducks_to_race_track_2.AddVelocityBounds(Vector2d(0, 0), Vector2d(0, 0));
+  // However, to limit acceleration constraints we need the
+  // ZeroDerivativeConstraints, which handled differently and are convex.
+  race_track_1_to_ducks.AddZeroDerivativeConstraints(2);
+  ducks_to_race_track_2.AddZeroDerivativeConstraints(2);
 
   // Bob wants to beat the time record!
   gcs.AddTimeCost();
 
   // Nonregression bound on the complexity of the underlying GCS MICP.
-  EXPECT_LT(gcs.EstimateComplexity(), 125);
-
-  if (!GurobiOrMosekSolverAvailable()) {
-    return;
-  }
+  EXPECT_LT(gcs.EstimateComplexity(), 185);
 
   auto [traj, result] = gcs.SolvePath(source, target);
 
@@ -426,12 +489,14 @@ GTEST_TEST(GcsTrajectoryOptimizationTest, VelocityBoundsOnEdges) {
 
   // The initial velocity should be zero and the final velocity should be at the
   // maximum.
-  auto traj_vel = traj.MakeDerivative();
-  EXPECT_TRUE(CompareMatrices(traj_vel->value(traj.start_time()),
+  EXPECT_TRUE(CompareMatrices(traj.EvalDerivative(traj.start_time(), 1),
                               Vector2d(0, 0), 1e-6));
-  EXPECT_TRUE(CompareMatrices(traj_vel->value(traj.end_time()),
+  EXPECT_TRUE(CompareMatrices(traj.EvalDerivative(traj.end_time(), 1),
                               Vector2d(kMaxSpeed, 0), 1e-6));
 
+  // We also said the car starts with zero acceleration.
+  EXPECT_TRUE(CompareMatrices(traj.EvalDerivative(traj.start_time(), 2),
+                              Vector2d(0, 0), 1e-6));
   // The total duration should be at least the duck delay and the minimum time
   // it would take to drive the track down at maximum speed.
   // kDuckDelay + 305m /kMaxSpeed.
@@ -448,12 +513,62 @@ GTEST_TEST(GcsTrajectoryOptimizationTest, VelocityBoundsOnEdges) {
   }
 
   // The car should be stopped at the ducks for kDuckDelay seconds.
-  EXPECT_TRUE(CompareMatrices(traj_vel->value(stopped_at_ducks_time),
+  EXPECT_TRUE(CompareMatrices(traj.EvalDerivative(stopped_at_ducks_time, 1),
+                              Vector2d(0, 0), 1e-6));
+  EXPECT_TRUE(CompareMatrices(traj.EvalDerivative(stopped_at_ducks_time, 2),
                               Vector2d(0, 0), 1e-6));
 
-  EXPECT_TRUE(
-      CompareMatrices(traj_vel->value(stopped_at_ducks_time + kDuckDelay),
-                      Vector2d(0, 0), 1e-6));
+  EXPECT_TRUE(CompareMatrices(
+      traj.EvalDerivative(stopped_at_ducks_time + kDuckDelay, 1),
+      Vector2d(0, 0), 1e-6));
+  EXPECT_TRUE(CompareMatrices(
+      traj.EvalDerivative(stopped_at_ducks_time + kDuckDelay, 2),
+      Vector2d(0, 0), 1e-6));
+}
+
+GTEST_TEST(GcsTrajectoryOptimizationTest, RemoveSubgraph) {
+  /*Ensure that removing a subgraph actually removes vertices/edges in the gcs*/
+  const int kDimension = 2;
+  GcsTrajectoryOptimization gcs(kDimension);
+  EXPECT_EQ(gcs.num_positions(), kDimension);
+
+  auto& graph1 =
+      gcs.AddRegions(MakeConvexSets(HPolyhedron::MakeUnitBox(kDimension),
+                                    HPolyhedron::MakeUnitBox(kDimension)),
+                     1);
+  auto& graph2 =
+      gcs.AddRegions(MakeConvexSets(HPolyhedron::MakeUnitBox(kDimension),
+                                    HPolyhedron::MakeUnitBox(kDimension)),
+                     1);
+  gcs.AddEdges(graph1, graph2);
+
+  // We expect four vertices, since there are two regions per subgraph.
+  const int kExpectedVertices = 4;
+  EXPECT_EQ(gcs.graph_of_convex_sets().Vertices().size(), kExpectedVertices);
+  // The regions in the subgraph are connected via two edges and since they
+  // overlap, another four edges are added between the subgraphs.
+  const int kExpectedEdges = 2 * 2 + 4;
+  EXPECT_EQ(gcs.graph_of_convex_sets().Edges().size(), kExpectedEdges);
+
+  // After removing both subgraphs, we expect no vertices or edges in the gcs.
+  gcs.RemoveSubgraph(graph1);
+  gcs.RemoveSubgraph(graph2);
+  EXPECT_EQ(gcs.graph_of_convex_sets().Vertices().size(), 0);
+  EXPECT_EQ(gcs.graph_of_convex_sets().Edges().size(), 0);
+  EXPECT_EQ(gcs.GetSubgraphs().size(), 0);
+  EXPECT_EQ(gcs.GetEdgesBetweenSubgraphs().size(), 0);
+
+  // Create to remove a subgraph that hasn't been associated with the gcs
+  // instance. For that, we will create another gcs object with a separate
+  // subgraph and try to remove it from the previous instance.
+  GcsTrajectoryOptimization gcs2(kDimension);
+
+  auto& graph3 =
+      gcs2.AddRegions(MakeConvexSets(HPolyhedron::MakeUnitBox(kDimension),
+                                     HPolyhedron::MakeUnitBox(kDimension)),
+                      1);
+  DRAKE_EXPECT_THROWS_MESSAGE(gcs.RemoveSubgraph(graph3),
+                              ".* is not registered with `this`.*");
 }
 
 GTEST_TEST(GcsTrajectoryOptimizationTest, InvalidPositions) {
@@ -495,7 +610,7 @@ GTEST_TEST(GcsTrajectoryOptimizationTest, ZeroOrderPathLengthCost) {
   DRAKE_EXPECT_NO_THROW(gcs.AddPathLengthCost());
 }
 
-GTEST_TEST(GcsTrajectoryOptimizationTest, InvalidVelocityBounds) {
+GTEST_TEST(GcsTrajectoryOptimizationTest, InvalidDerivativeBounds) {
   /* The velocity of a curve is not defined for a subgraph of order 0.*/
   const int kDimension = 2;
   GcsTrajectoryOptimization gcs(kDimension);
@@ -533,6 +648,23 @@ GTEST_TEST(GcsTrajectoryOptimizationTest, InvalidVelocityBounds) {
                                   Vector2d::Zero(), Vector2d::Zero()),
                               "Cannot add velocity bounds to a subgraph edges "
                               "where both subgraphs have zero order.");
+
+  // The derivative order must be greater than 1.
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      regions1_to_regions2.AddZeroDerivativeConstraints(0),
+      "Derivative order must be greater than 1.");
+
+  // Can't enforce zero derivatives to an edge if both regions have order 0.
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      regions1_to_regions2.AddZeroDerivativeConstraints(1),
+      "Cannot add derivative bounds to subgraph edges where both subgraphs "
+      "have less than derivative order.\n From subgraph order: 0\n To subgraph "
+      "order: 0\n Derivative order: 1");
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      regions1_to_regions2.AddZeroDerivativeConstraints(2),
+      "Cannot add derivative bounds to subgraph edges where both subgraphs "
+      "have less than derivative order.\n From subgraph order: 0\n To subgraph "
+      "order: 0\n Derivative order: 2");
 }
 
 GTEST_TEST(GcsTrajectoryOptimizationTest, InvalidContinuityConstraints) {
@@ -606,10 +738,6 @@ GTEST_TEST(GcsTrajectoryOptimizationTest, DisjointGraph) {
       gcs.AddRegions(MakeConvexSets(Point(start1), Point(start2)), 0);
 
   auto& target = gcs.AddRegions(MakeConvexSets(Point(goal1), Point(goal2)), 0);
-
-  if (!GurobiOrMosekSolverAvailable()) {
-    return;
-  }
 
   // Define solver options.
   GraphOfConvexSetsOptions options;
@@ -749,6 +877,105 @@ GTEST_TEST(GcsTrajectoryOptimizationTest, InvalidSubspace) {
   DRAKE_EXPECT_THROWS_MESSAGE(
       gcs.AddEdges(regions1, regions2, &vertices_subspace),
       "Subspace must be a Point or HPolyhedron.");
+}
+
+GTEST_TEST(GcsTrajectoryOptimizationTest, UnwrapToContinousTrajectory) {
+  std::vector<copyable_unique_ptr<trajectories::Trajectory<double>>> segments;
+  Eigen::MatrixXd control_points_1(3, 3), control_points_2(3, 3),
+      control_points_3(3, 3);
+  // clang-format off
+  control_points_1 << 0, 1.0, 2.0,
+                      1.0 - 8 * M_PI, 2.0 - 8 * M_PI, 3.0 - 8 * M_PI,
+                      2.0 + 4 * M_PI, 1.0 + 4 * M_PI, 4.0 + 4 * M_PI;
+  control_points_2 << 2.0 , 2.5, 4.0,
+                      3.0 + 2 * M_PI, 1.0 + 2 * M_PI, 0.0 + 2 * M_PI,
+                      4.0 - 6 * M_PI, 3.0 - 6 * M_PI, 2.0 - 6 * M_PI;
+  control_points_3 << 4.0, -2.0, 0.0,
+                      0.0, 1.0, 2.0,
+                      2.0, 3.0, 4.0;
+  // clang-format on
+  segments.emplace_back(std::make_unique<trajectories::BezierCurve<double>>(
+      0.0, 1.0, control_points_1));
+  segments.emplace_back(std::make_unique<trajectories::BezierCurve<double>>(
+      1.0, 4.0, control_points_2));
+  segments.emplace_back(std::make_unique<trajectories::BezierCurve<double>>(
+      4.0, 6.0, control_points_3));
+  const auto traj = trajectories::CompositeTrajectory<double>(segments);
+  std::vector<int> continuous_revolute_joints = {1, 2};
+  const auto unwrapped_traj =
+      GcsTrajectoryOptimization::UnwrapToContinousTrajectory(
+          traj, continuous_revolute_joints);
+  // Small number to shift time around discontinuity points.
+  const double time_eps = 1e-7;
+  // Small number to compare position around discontinuity points.
+  // A rough upper bound for the largest derivative of the Bezier curve is about
+  // 10, therefore the error upper bound is expected to be around 10 * time_eps.
+  const double pos_eps = 1e-6;
+  double middle_time_1 = unwrapped_traj.get_segment_times()[1];
+  double middle_time_2 = unwrapped_traj.get_segment_times()[2];
+  EXPECT_NEAR(middle_time_1, 1.0, time_eps);
+  EXPECT_NEAR(middle_time_2, 4.0, time_eps);
+  // Verify the unwrapped trajectory is continous at the middle times.
+  EXPECT_TRUE(CompareMatrices(unwrapped_traj.value(middle_time_1 - time_eps),
+                              unwrapped_traj.value(middle_time_1 + time_eps),
+                              pos_eps));
+  EXPECT_TRUE(CompareMatrices(unwrapped_traj.value(middle_time_2 - time_eps),
+                              unwrapped_traj.value(middle_time_2 + time_eps),
+                              pos_eps));
+  std::vector<int> starting_rounds = {-1, 0};
+  const auto unwrapped_traj_with_start =
+      GcsTrajectoryOptimization::UnwrapToContinousTrajectory(
+          traj, continuous_revolute_joints, starting_rounds);
+  // Check if the start is unwrapped to the correct value.
+  EXPECT_TRUE(CompareMatrices(unwrapped_traj_with_start.value(0.0),
+                              Eigen::Vector3d{0.0, 1.0 - 2 * M_PI, 2.0},
+                              pos_eps));
+  EXPECT_TRUE(CompareMatrices(
+      unwrapped_traj_with_start.value(middle_time_1 - time_eps),
+      unwrapped_traj_with_start.value(middle_time_1 + time_eps), pos_eps));
+  EXPECT_TRUE(CompareMatrices(
+      unwrapped_traj_with_start.value(middle_time_2 - time_eps),
+      unwrapped_traj_with_start.value(middle_time_2 + time_eps), pos_eps));
+  // Check for invalid start_rounds
+  const std::vector<int> invalid_start_rounds = {-1, 0, 1};
+  EXPECT_THROW(GcsTrajectoryOptimization::UnwrapToContinousTrajectory(
+                   traj, continuous_revolute_joints, invalid_start_rounds),
+               std::runtime_error);
+  // Check for discontinuity for continuous revolute joints
+  control_points_2 << 2.5, 2.5, 4.0, 3.0 + 2 * M_PI, 1.0 + 2 * M_PI,
+      0.0 + 2 * M_PI, 4.0 - 6 * M_PI, 3.0 - 6 * M_PI, 2.0 - 6 * M_PI;
+  segments[1] = std::make_unique<trajectories::BezierCurve<double>>(
+      1.0, 4.0, control_points_2);
+  const auto traj_not_continous_on_revolute_manifold =
+      trajectories::CompositeTrajectory<double>(segments);
+  // For joint 0, the trajectory is not continous: 2.0 (end of segment 0)--> 2.5
+  // (start of segment 1). If we treat joint 0 as continous revolute joint, the
+  // unwrapping will fail.
+  continuous_revolute_joints = {0, 1};
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      GcsTrajectoryOptimization::UnwrapToContinousTrajectory(
+          traj_not_continous_on_revolute_manifold, continuous_revolute_joints),
+      ".*is not a multiple of 2π at segment.*");
+}
+
+GTEST_TEST(GcsTrajectoryOptimizationTest, NotBezierCurveError) {
+  std::vector<copyable_unique_ptr<trajectories::Trajectory<double>>> segments;
+  auto traj_1 = trajectories::PiecewisePolynomial<double>::FirstOrderHold(
+      std::vector<double>{0, 1},
+      std::vector<Eigen::MatrixXd>{Eigen::MatrixXd::Zero(1, 2),
+                                   Eigen::MatrixXd::Ones(1, 2)});
+  auto traj_2 = trajectories::PiecewisePolynomial<double>::FirstOrderHold(
+      std::vector<double>{1, 2},
+      std::vector<Eigen::MatrixXd>{Eigen::MatrixXd::Zero(1, 2),
+                                   Eigen::MatrixXd::Ones(1, 2)});
+  segments.emplace_back(traj_1.Clone());
+  segments.emplace_back(traj_2.Clone());
+  const auto traj = trajectories::CompositeTrajectory<double>(segments);
+  std::vector<int> continuous_revolute_joints = {0};
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      GcsTrajectoryOptimization::UnwrapToContinousTrajectory(
+          traj, continuous_revolute_joints),
+      ".*BezierCurve<double>.*");
 }
 
 /* This 2D environment has been presented in the GCS paper.
@@ -900,10 +1127,6 @@ TEST_F(SimpleEnv2D, BasicShortestPath) {
   // Nonregression bound on the complexity of the underlying GCS MICP.
   EXPECT_LT(gcs.EstimateComplexity(), 1e3);
 
-  if (!GurobiOrMosekSolverAvailable()) {
-    return;
-  }
-
   // Define solver options.
   GraphOfConvexSetsOptions options;
   options.max_rounded_paths = 3;
@@ -939,10 +1162,6 @@ TEST_F(SimpleEnv2D, GlobalContinuityConstraints) {
 
   // Nonregression bound on the complexity of the underlying GCS MICP.
   EXPECT_LT(gcs.EstimateComplexity(), 2.5e3);
-
-  if (!GurobiOrMosekSolverAvailable()) {
-    return;
-  }
 
   // Define solver options.
   GraphOfConvexSetsOptions options;
@@ -1018,10 +1237,6 @@ TEST_F(SimpleEnv2D, DurationDelay) {
 
   // Nonregression bound on the complexity of the underlying GCS MICP.
   EXPECT_LT(gcs.EstimateComplexity(), 1e3);
-
-  if (!GurobiOrMosekSolverAvailable()) {
-    return;
-  }
 
   // Define solver options.
   GraphOfConvexSetsOptions options;
@@ -1104,10 +1319,6 @@ TEST_F(SimpleEnv2D, MultiStartGoal) {
 
   // Nonregression bound on the complexity of the underlying GCS MICP.
   EXPECT_LT(gcs.EstimateComplexity(), 1e3);
-
-  if (!GurobiOrMosekSolverAvailable()) {
-    return;
-  }
 
   // Define solver options.
   GraphOfConvexSetsOptions options;
@@ -1216,9 +1427,9 @@ TEST_F(SimpleEnv2D, IntermediatePoint) {
   // Nonregression bound on the complexity of the underlying GCS MICP.
   EXPECT_LT(gcs.EstimateComplexity(), 1100);
 
-  if (!GurobiOrMosekSolverAvailable()) {
-    return;
-  }
+  // During memory check, this test will take too long with the default solvers
+  // and requires both Gurobi and Mosek to be available.
+  if (GurobiOrMosekSolverUnavailableDuringMemoryCheck()) return;
 
   // Define solver options.
   GraphOfConvexSetsOptions options;
@@ -1393,10 +1604,9 @@ GTEST_TEST(GcsTrajectoryOptimizationTest, WraparoundInOneDimension) {
 }
 
 GTEST_TEST(GcsTrajectoryOptimizationTest, WraparoundInTwoDimensions) {
-  if (!GurobiOrMosekSolverAvailable()) {
-    // These test cases are too large for free solvers such as CSDP.
-    return;
-  }
+  // During memory check, this test will take too long with the default solvers
+  // and requires both Gurobi and Mosek to be available.
+  if (GurobiOrMosekSolverUnavailableDuringMemoryCheck()) return;
   const double tol = 1e-7;
 
   ConvexSets sets;
@@ -1548,6 +1758,60 @@ GTEST_TEST(GcsTrajectoryOptimizationTest,
                               ".*doesn't respect the convexity radius.*");
 }
 
+GTEST_TEST(GcsTrajectoryOptimizationTest, WraparoundSubspace) {
+  // 1D example.
+  Eigen::Matrix<double, 1, 2> points1;
+  Eigen::Matrix<double, 1, 2> points2;
+  Eigen::Matrix<double, 1, 2> points3;
+  points1 << 0, 3;
+  points2 << 2.5, 5.5;
+  points3 << 5, 8;
+  const VPolytope v1(points1);
+  const VPolytope v2(points2);
+  const VPolytope v3(points3);
+  std::vector<int> continuous_revolute_joints = {0};
+  const Point subspace12(Vector1d{2.75 + (6 * M_PI)});
+  const Point subspace23(Vector1d{5.25 - (4 * M_PI)});
+  const Point subspace13(Vector1d{7.0 + (2 * M_PI)});
+
+  GcsTrajectoryOptimization gcs(1, continuous_revolute_joints);
+  auto& subgraph1 = gcs.AddRegions(MakeConvexSets(HPolyhedron(v1)), 1);
+  auto& subgraph2 =
+      gcs.AddRegions(MakeConvexSets(HPolyhedron(v2), HPolyhedron(v3)), 1);
+
+  // Initially, there should be two edges, v2 -> v3 and v3 -> v2.
+  int expected_num_edges = 2;
+
+  // When we add edges from subgraph1 to subgraph2, we add edges v1 -> v2
+  // and v1 -> v3.
+  gcs.AddEdges(subgraph1, subgraph2);
+  expected_num_edges += 2;
+  EXPECT_EQ(gcs.graph_of_convex_sets().Edges().size(), expected_num_edges);
+
+  // When we add edges from subgraph1 to subgraph2 through subspace12, only
+  // v1 -> v2 is added as an edge, since their intersection overlaps with
+  // subspace12. the intersection of v1 and v3 does not overlap with subspace12,
+  // so v1 -> v3 is not added.
+  gcs.AddEdges(subgraph1, subgraph2, &subspace12);
+  expected_num_edges += 1;
+  EXPECT_EQ(gcs.graph_of_convex_sets().Edges().size(), expected_num_edges);
+
+  // When we add edges from subgraph1 to subgraph2 through subspace13, only
+  // v1 -> v3 is added as an edge, since their intersection overlaps with
+  // subspace13. the intersection of v1 and v2 does not overlap with subspace13,
+  // so v1 -> v2 is not added.
+  gcs.AddEdges(subgraph1, subgraph2, &subspace13);
+  expected_num_edges += 1;
+  EXPECT_EQ(gcs.graph_of_convex_sets().Edges().size(), expected_num_edges);
+
+  // When we add edges from subgraph1 to subgraph2 through subspace23, no edges
+  // are added, since the intersection between v1 and v2 does not overlap with
+  // subspace23, and the intersection between v1 and v3 does not overlap with
+  // subspace23.
+  gcs.AddEdges(subgraph1, subgraph2, &subspace23);
+  EXPECT_EQ(gcs.graph_of_convex_sets().Edges().size(), expected_num_edges);
+}
+
 GTEST_TEST(GcsTrajectoryOptimizationTest, ContinuousJointsApi) {
   Eigen::Matrix<double, 1, 2> points;
   points << 0, 2;
@@ -1578,14 +1842,10 @@ GTEST_TEST(GcsTrajectoryOptimizationTest, ContinuousJointsApi) {
 
 GTEST_TEST(GcsTrajectoryOptimizationTest, GetContinuousJoints) {
   MultibodyPlant<double> plant(0.0);
-  const RigidBody<double>& first_body =
-      plant.AddRigidBody("first_body", SpatialInertia<double>());
-  const RigidBody<double>& second_body =
-      plant.AddRigidBody("second_body", SpatialInertia<double>());
-  const RigidBody<double>& third_body =
-      plant.AddRigidBody("third_body", SpatialInertia<double>());
-  const RigidBody<double>& fourth_body =
-      plant.AddRigidBody("fourth_body", SpatialInertia<double>());
+  const RigidBody<double>& first_body = plant.AddRigidBody("first_body");
+  const RigidBody<double>& second_body = plant.AddRigidBody("second_body");
+  const RigidBody<double>& third_body = plant.AddRigidBody("third_body");
+  const RigidBody<double>& fourth_body = plant.AddRigidBody("fourth_body");
 
   // Add a planar joint without limits
   plant.AddJoint<PlanarJoint>("first_joint", plant.world_body(), {}, first_body,

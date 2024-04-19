@@ -1,16 +1,15 @@
+load("@python//:version.bzl", "PYTHON_SITE_PACKAGES_RELPATH")
 load("//tools/install:install.bzl", "InstallInfo")
 load("//tools/skylark:pathutils.bzl", "basename")
-load("@python//:version.bzl", "PYTHON_SITE_PACKAGES_RELPATH")
 
 def _impl(ctx):
     known_non_runfiles = [
         # These are installed in share/drake, but are not runfiles (at least,
         # not with these paths).
-        "manipulation/models/iiwa_description/iiwa_stack.LICENSE.txt",
         "setup/Brewfile",
         "setup/install_prereqs",
-        "setup/packages-focal.txt",
         "setup/packages-jammy.txt",
+        "setup/packages-noble.txt",
         "setup/requirements.txt",
         # These are installed in share/drake and are runfiles for certain
         # targets, but none of those targets are relevant for this use case.

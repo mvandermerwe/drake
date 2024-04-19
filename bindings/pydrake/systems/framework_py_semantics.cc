@@ -671,7 +671,7 @@ void DoScalarDependentDefinitions(py::module m) {
           py::arg("name") = kUseDefaultName, py_rvp::reference_internal,
           doc.DiagramBuilder.ExportInput.doc)
       .def("ConnectInput",
-          py::overload_cast<const std::string&, const InputPort<T>&>(
+          py::overload_cast<std::string_view, const InputPort<T>&>(
               &DiagramBuilder<T>::ConnectInput),
           py::arg("diagram_port_name"), py::arg("input"),
           doc.DiagramBuilder.ConnectInput.doc_2args_diagram_port_name_input)
@@ -1043,7 +1043,7 @@ void DoScalarDependentDefinitions(py::module m) {
       .def("value",
           overload_cast_explicit<const VectorX<T>&, int>(
               &DiscreteValues<T>::value),
-          py_rvp::reference_internal, py::arg("index") = 0,
+          return_value_policy_for_scalar_type<T>(), py::arg("index") = 0,
           doc.DiscreteValues.value.doc_1args)
       .def("get_vector",
           overload_cast_explicit<const BasicVector<T>&, int>(
@@ -1067,13 +1067,14 @@ void DoScalarDependentDefinitions(py::module m) {
               int index) -> Eigen::Ref<const VectorX<T>> {
             return self->get_value(index);
           },
-          py_rvp::reference_internal, py::arg("index") = 0,
+          return_value_policy_for_scalar_type<T>(), py::arg("index") = 0,
           doc.DiscreteValues.get_value.doc_1args)
       .def(
           "get_mutable_value",
           [](DiscreteValues<T>* self, int index) -> Eigen::Ref<VectorX<T>> {
             return self->get_mutable_value(index);
           },
+          // N.B. We explicitly want a failure when T != double due to #8116.
           py_rvp::reference_internal, py::arg("index") = 0,
           doc.DiscreteValues.get_mutable_value.doc_1args)
       .def(

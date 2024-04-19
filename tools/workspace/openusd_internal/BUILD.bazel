@@ -1,36 +1,46 @@
-load("//tools/workspace:generate_file.bzl", "generate_file")
+load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
 load("//tools/lint:lint.bzl", "add_lint_tests")
 
-# TODO(jwnimmer-tri) To prove that the @openusd_internal build system is
-# working properly, here we perform a smoke test of `usdcat --help`. Once
-# we have enough real unit tests in Drake that call into USD and prove out
-# the build, we should remove this simple smoke test.
-
-alias(
-    name = "usdcat",
-    actual = "@openusd_internal//:usdcat",
+py_binary(
+    name = "upgrade",
+    srcs = ["upgrade.py"],
+    data = [
+        "@openusd_internal//:cmakelists",
+    ],
     tags = [
-        # Only compile this binary when the usdcat_help test needs it.
+        # Only build this binary when necessary for linting or re-locking.
         "manual",
+    ],
+    deps = [
+        "@bazel_tools//tools/python/runfiles",
     ],
 )
 
-generate_file(
-    name = "empty.sh",
-    # When WITH_USD is off, this serves as a test stub dummy.
-    content = "echo 'WITH_USD is not ON'",
+genrule(
+    name = "_gen_files",
+    outs = ["gen/files.bzl"],
+    cmd = "$(execpath :upgrade) --output=$@",
+    tags = [
+        # Only compute the new lockfile when necessary for linting.
+        "manual",
+    ],
+    tools = [":upgrade"],
 )
 
-sh_test(
-    name = "usdcat_help",
-    srcs = select({
-        "//tools:with_usd": [":usdcat"],
-        "//conditions:default": ["empty.sh"],
+diff_test(
+    name = "lock_test",
+    failure_message = (
+        "To fix, run this command:\n" +
+        "  bazel run //tools/workspace/openusd_internal:upgrade -- --relock"
+    ),
+    file1 = ":lock/files.bzl",
+    file2 = select({
+        "//tools:with_usd": ":gen/files.bzl",
+        # When USD is off, we nerf this test to be a self-comparison no-op.
+        "//conditions:default": ":lock/files.bzl",
     }),
-    args = ["--help"],
     tags = [
-        # TODO(jwnimmer-tri) Re-enable this once we fix Boost problems.
-        "manual",
+        "lint",
     ],
 )
 

@@ -1,14 +1,14 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
+load(
+    "//tools/skylark:alias.bzl",
+    "drake_cc_hdrs_forwarding_library",
+)
 load(
     "//tools/skylark:drake_cc.bzl",
     "drake_cc_googletest",
     "drake_cc_library",
     "drake_cc_package_library",
 )
-load(
-    "//tools/skylark:alias.bzl",
-    "drake_cc_hdrs_forwarding_library",
-)
-load("//tools/lint:lint.bzl", "add_lint_tests")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -621,6 +621,7 @@ drake_cc_library(
     deps = [
         ":abstract_value_cloner",
         "//common:pointer_cast",
+        "//common:string_container",
     ],
 )
 
@@ -632,6 +633,7 @@ drake_cc_library(
         ":diagram",
         "//common:default_scalars",
         "//common:essential",
+        "//common:string_container",
     ],
     deps = [
         "//common:pointer_cast",

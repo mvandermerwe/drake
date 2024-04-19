@@ -57,7 +57,7 @@ class UrdfParserTest : public test::DiagnosticPolicyTestBase {
   std::optional<ModelInstanceIndex> AddModelFromUrdfFile(
       const std::string& file_name,
       const std::string& model_name) {
-    internal::CollisionFilterGroupResolver resolver{&plant_};
+    internal::CollisionFilterGroupResolver resolver{&plant_, &group_output_};
     ParsingWorkspace w{options_, package_map_, diagnostic_policy_,
                        &plant_, &resolver, NoSelect};
     auto result = AddModelFromUrdf(
@@ -69,7 +69,7 @@ class UrdfParserTest : public test::DiagnosticPolicyTestBase {
   std::optional<ModelInstanceIndex> AddModelFromUrdfString(
       const std::string& file_contents,
       const std::string& model_name) {
-    internal::CollisionFilterGroupResolver resolver{&plant_};
+    internal::CollisionFilterGroupResolver resolver{&plant_, &group_output_};
     ParsingWorkspace w{options_, package_map_, diagnostic_policy_,
                        &plant_, &resolver, NoSelect};
     auto result = AddModelFromUrdf(
@@ -91,6 +91,7 @@ class UrdfParserTest : public test::DiagnosticPolicyTestBase {
   // Sap-specific features like the joint 'mimic' element.
   MultibodyPlant<double> plant_{0.1};
   SceneGraph<double> scene_graph_;
+  CollisionFilterGroups group_output_;
 };
 
 // Some tests contain deliberate typos to provoke parser errors or warnings. In
@@ -820,7 +821,7 @@ TEST_F(UrdfParserTest, JointParsingTest) {
   EXPECT_EQ(revolute_joint.parent_body().name(), "link1");
   EXPECT_EQ(revolute_joint.child_body().name(), "link2");
   EXPECT_EQ(revolute_joint.revolute_axis(), Vector3d::UnitZ());
-  EXPECT_EQ(revolute_joint.damping(), 0.1);
+  EXPECT_EQ(revolute_joint.default_damping(), 0.1);
   EXPECT_TRUE(
       CompareMatrices(revolute_joint.position_lower_limits(), Vector1d(-1)));
   EXPECT_TRUE(
@@ -848,7 +849,7 @@ TEST_F(UrdfParserTest, JointParsingTest) {
   EXPECT_EQ(prismatic_joint.parent_body().name(), "link2");
   EXPECT_EQ(prismatic_joint.child_body().name(), "link3");
   EXPECT_EQ(prismatic_joint.translation_axis(), Vector3d::UnitZ());
-  EXPECT_EQ(prismatic_joint.damping(), 0.1);
+  EXPECT_EQ(prismatic_joint.default_damping(), 0.1);
   EXPECT_TRUE(
       CompareMatrices(prismatic_joint.position_lower_limits(), Vector1d(-2)));
   EXPECT_TRUE(
@@ -871,7 +872,7 @@ TEST_F(UrdfParserTest, JointParsingTest) {
   EXPECT_EQ(ball_joint.name(), "ball_joint");
   EXPECT_EQ(ball_joint.parent_body().name(), "link3");
   EXPECT_EQ(ball_joint.child_body().name(), "link4");
-  EXPECT_EQ(ball_joint.damping(), 0.1);
+  EXPECT_EQ(ball_joint.default_damping(), 0.1);
   const Vector3d inf3(std::numeric_limits<double>::infinity(),
                       std::numeric_limits<double>::infinity(),
                       std::numeric_limits<double>::infinity());
@@ -912,7 +913,7 @@ TEST_F(UrdfParserTest, JointParsingTest) {
   EXPECT_EQ(universal_joint.name(), "universal_joint");
   EXPECT_EQ(universal_joint.parent_body().name(), "link5");
   EXPECT_EQ(universal_joint.child_body().name(), "link6");
-  EXPECT_EQ(universal_joint.damping(), 0.1);
+  EXPECT_EQ(universal_joint.default_damping(), 0.1);
   const Vector2d inf2(std::numeric_limits<double>::infinity(),
                       std::numeric_limits<double>::infinity());
   const Vector2d neg_inf2(-std::numeric_limits<double>::infinity(),
@@ -931,7 +932,8 @@ TEST_F(UrdfParserTest, JointParsingTest) {
   EXPECT_EQ(planar_joint.name(), "planar_joint");
   EXPECT_EQ(planar_joint.parent_body().name(), "link6");
   EXPECT_EQ(planar_joint.child_body().name(), "link7");
-  EXPECT_TRUE(CompareMatrices(planar_joint.damping(), Vector3d::Constant(0.1)));
+  EXPECT_TRUE(
+      CompareMatrices(planar_joint.default_damping(), Vector3d::Constant(0.1)));
   EXPECT_TRUE(CompareMatrices(planar_joint.position_lower_limits(), neg_inf3));
   EXPECT_TRUE(CompareMatrices(planar_joint.position_upper_limits(), inf3));
   EXPECT_TRUE(CompareMatrices(planar_joint.velocity_lower_limits(), neg_inf3));
@@ -967,7 +969,7 @@ TEST_F(UrdfParserTest, JointParsingTest) {
   EXPECT_EQ(screw_joint.child_body().name(), "link9");
   EXPECT_EQ(screw_joint.screw_axis(), Vector3d::UnitX());
   EXPECT_EQ(screw_joint.screw_pitch(), 0.04);
-  EXPECT_EQ(screw_joint.damping(), 0.1);
+  EXPECT_EQ(screw_joint.default_damping(), 0.1);
   EXPECT_TRUE(
       CompareMatrices(screw_joint.position_lower_limits(), neg_inf));
   EXPECT_TRUE(CompareMatrices(screw_joint.position_upper_limits(), inf));
@@ -1860,6 +1862,9 @@ TEST_F(UrdfParserTest, CollisionFilterGroupParsingTest) {
   // Spot check that the two sets are separate.
   EXPECT_FALSE(inspector.CollisionFiltered(ids[1], ids[10]));
   EXPECT_FALSE(inspector.CollisionFiltered(ids[6], ids[7]));
+
+  // Spot check that the filter groups are reported.
+  EXPECT_FALSE(group_output_.empty());
 
   // Make sure we can add the model a second time.
   AddModelFromUrdfFile(full_name, "model2");

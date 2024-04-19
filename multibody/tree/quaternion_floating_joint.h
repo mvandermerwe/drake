@@ -23,10 +23,13 @@ namespace multibody {
 /// this Joint allows frame M to translate and rotate freely with respect to F,
 /// introducing six degrees of freedom. This Joint introduces four generalized
 /// positions to describe the orientation `R_FM` of frame M in F with a
-/// quaternion `q_FM`, and three generalized positions to describe the position
-/// of frame M's origin in F with a position vector `p_FM`. As generalized
-/// velocities, this Joint introduces the angular velocity `w_FM` of frame M in
-/// F and the linear velocity `v_FM` of frame M's origin in frame F.
+/// quaternion `q_FM`, and three generalized positions to describe the
+/// translation of frame M's origin in F with a position vector `p_FM`. The
+/// seven entries of the configuration vector q are ordered `(q_FM, p_FM)` with
+/// the quaternion, ordered wxyz (scalar then vector), preceding the translation
+/// vector. As generalized velocities, this Joint introduces the angular
+/// velocity `w_FM` of frame M in F and the linear velocity `v_FM` of frame M's
+/// origin in frame F, ordered `(w_FM, v_FM)`.
 ///
 /// @tparam_default_scalar
 template <typename T>
@@ -60,13 +63,13 @@ class QuaternionFloatingJoint final : public Joint<T> {
   /// @param[in] angular_damping
   ///  Viscous damping coefficient in N⋅m⋅s for the angular component of
   ///  this joint's velocity, used to model losses within the joint. See
-  ///  documentation of angular_damping() for details on modelling of the
-  ///  damping force.
+  ///  documentation of default_angular_damping() for details on modelling of
+  ///  the damping force.
   /// @param[in] translational_damping
   ///  Viscous damping coefficient in N⋅s/m for the translational component of
   ///  this joint's velocity, used to model losses within the joint. See
-  ///  documentation of translational_damping() for details on modelling of the
-  ///  damping force.
+  ///  documentation of default_translational_damping() for details on modelling
+  ///  of the damping force.
   /// @throws std::exception if angular_damping is negative.
   /// @throws std::exception if translational_damping is negative.
   QuaternionFloatingJoint(const std::string& name,
@@ -100,24 +103,39 @@ class QuaternionFloatingJoint final : public Joint<T> {
     return name.access();
   }
 
-  /// Returns `this` joint's angular damping constant in N⋅m⋅s. The damping
-  /// torque (in N⋅m) is modeled as `τ = -damping⋅ω`, i.e. opposing motion, with
-  /// ω the angular velocity of frame M in F (see get_angular_velocity()) and τ
-  /// the torque on child body B (to which M is rigidly attached).
+  /// Returns `this` joint's default angular damping constant in N⋅m⋅s. The
+  /// damping torque (in N⋅m) is modeled as `τ = -damping⋅ω`, i.e. opposing
+  /// motion, with ω the angular velocity of frame M in F (see
+  /// get_angular_velocity()) and τ the torque on child body B (to which M is
+  /// rigidly attached).
+  double default_angular_damping() const {
+    // N.B. All 3 angular damping coefficients are set to the same value for
+    // this joint.
+    return this->default_damping_vector()[0];
+  }
+
+  DRAKE_DEPRECATED("2024-06-01", "Use default_angular_damping() instead.")
   double angular_damping() const {
     // N.B. All 3 angular damping coefficients are set to the same value for
     // this joint.
-    return this->damping_vector()[0];
+    return this->default_damping_vector()[0];
   }
 
-  /// Returns `this` joint's translational damping constant in N⋅s/m. The
-  /// damping force (in N) is modeled as `f = -damping⋅v` i.e. opposing motion,
-  /// with v the translational velocity of frame M in F (see
+  /// Returns `this` joint's default translational damping constant in N⋅s/m.
+  /// The damping force (in N) is modeled as `f = -damping⋅v` i.e. opposing
+  /// motion, with v the translational velocity of frame M in F (see
   /// get_translational_velocity()) and f the force on child body B at Mo.
+  double default_translational_damping() const {
+    // N.B. All 3 translational damping coefficients are set to the same value
+    // for this joint.
+    return this->default_damping_vector()[3];
+  }
+
+  DRAKE_DEPRECATED("2024-06-01", "Use default_translational_damping() instead.")
   double translational_damping() const {
     // N.B. All 3 translational damping coefficients are set to the same value
     // for this joint.
-    return this->damping_vector()[3];
+    return this->default_damping_vector()[3];
   }
 
   /// @name Context-dependent value access
@@ -390,10 +408,10 @@ class QuaternionFloatingJoint final : public Joint<T> {
   /// Therefore arguments were already checked to be valid.
   /// This method adds into the translational component of `forces` for `this`
   /// joint a dissipative force according to the viscous law `f = -d⋅v`, with d
-  /// the damping coefficient (see translational_damping()). This method also
-  /// adds into the angular component of `forces` for `this` joint a dissipative
-  /// torque according to the viscous law `τ = -d⋅ω`, with d the damping
-  /// coefficient (see angular_damping()).
+  /// the damping coefficient (see default_translational_damping()). This method
+  /// also adds into the angular component of `forces` for `this` joint a
+  /// dissipative torque according to the viscous law `τ = -d⋅ω`, with d the
+  /// damping coefficient (see default_angular_damping()).
   void DoAddInDamping(const systems::Context<T>& context,
                       MultibodyForces<T>* forces) const override;
 

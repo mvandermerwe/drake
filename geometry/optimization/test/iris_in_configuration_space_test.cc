@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "drake/common/find_resource.h"
+#include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/common/test_utilities/expect_throws_message.h"
 #include "drake/common/test_utilities/maybe_pause_for_user.h"
 #include "drake/geometry/meshcat.h"
@@ -10,6 +11,8 @@
 #include "drake/geometry/test_utilities/meshcat_environment.h"
 #include "drake/multibody/inverse_kinematics/inverse_kinematics.h"
 #include "drake/multibody/parsing/parser.h"
+#include "drake/solvers/ipopt_solver.h"
+#include "drake/solvers/snopt_solver.h"
 #include "drake/systems/framework/diagram_builder.h"
 
 namespace drake {
@@ -138,7 +141,7 @@ GTEST_TEST(IrisInConfigurationSpaceTest, ConfigurationSpaceMargin) {
 }
 
 const char boxes_with_mesh_urdf[] = R"""(
-<robot name="boxes">
+<robot xmlns:drake="http://drake.mit.edu" name="boxes">
   <link name="fixed">
     <collision name="right">
       <origin rpy="0 0 0" xyz="2.5 0 0"/>
@@ -234,6 +237,19 @@ GTEST_TEST(IrisInConfigurationSpaceTest, ConfigurationObstacles) {
     EXPECT_TRUE(region.PointInSet(Vector1d{qmax - kTol}));
     EXPECT_FALSE(region.PointInSet(Vector1d{qmin - kTol}));
     EXPECT_FALSE(region.PointInSet(Vector1d{qmax + kTol}));
+
+    // Test solver options
+    // First change the counterexample solver options. We should get a different
+    // IRIS region.
+    options.solver_options.emplace(solvers::SolverOptions());
+    options.solver_options->SetOption(solvers::IpoptSolver::id(), "max_iter",
+                                      0);
+    options.solver_options->SetOption(solvers::SnoptSolver::id(),
+                                      "Major Iterations Limit", 0);
+    const HPolyhedron region_no_counterexample =
+        IrisFromUrdf(boxes_urdf, sample, options);
+    EXPECT_FALSE(CompareMatrices(region.A(), region_no_counterexample.A()));
+    options.solver_options = std::nullopt;
   }
 
   // Configuration space obstacles align with task space obstacle.
@@ -920,7 +936,8 @@ GTEST_TEST(IrisInConfigurationSpaceTest, ConvexConfigurationSpace) {
   // to non-uniform sampling with less mixing_steps.
   options.mixing_steps = 1;  // Smaller than the default.
   HPolyhedron region2 = IrisFromUrdf(convex_urdf, sample, options);
-  EXPECT_GE(region.MaximumVolumeInscribedEllipsoid().Volume(),
+  constexpr double kTol = 1e-4;
+  EXPECT_GE(region.MaximumVolumeInscribedEllipsoid().Volume() + kTol,
             region2.MaximumVolumeInscribedEllipsoid().Volume());
 }
 

@@ -10,7 +10,7 @@ def build_bazel_apple_support_repository(
     github_archive(
         name = name,
         repository = "bazelbuild/apple_support",  # License: Apache-2.0
-        commit = "1.11.1",
-        sha256 = "1f316618f49501f37749a402a4ce41c8431ca8063d57e913edf72a69638a3344",  # noqa
+        commit = "1.15.1",
+        sha256 = "d05f4352f46ea182b077b05c18d57d39daf8bf6e8aa25e7f5f4a893ecabe98de",  # noqa
         mirrors = mirrors,
     )

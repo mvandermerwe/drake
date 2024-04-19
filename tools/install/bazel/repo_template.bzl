@@ -1,5 +1,7 @@
 # -*- bazel -*-
 
+print("DRAKE DEPRECATED: The repo.bzl file is deprecated and will be removed on or after 2024-07-01. In the meantime, is is no longer covered by CI so might break without notice.")  # noqa
+
 # * # Comment lines beginning with a "# * #" are stripped out as part of the
 # * # conversion from repo_template.bzl to repo.bzl via the repo_gen tool.
 
@@ -142,14 +144,15 @@ _fmt_repository = repository_rule(
 )
 
 def _drake_models_impl(repo_ctx):
-    repo_ctx.file(
-        "BUILD.bazel",
-        _BUILD_FILE_CONTENTS["external-drake_models-BUILD.bazel"],
-    )
     repo_ctx.download_and_extract(
         url = ["@@MODELS_URLS@@"],
         sha256 = "@@MODELS_SHA256@@",
         stripPrefix = "@@MODELS_STRIP_PREFIX@@",
+    )
+    repo_ctx.delete("MODULE.bazel")
+    repo_ctx.file(
+        "BUILD.bazel",
+        _BUILD_FILE_CONTENTS["external-drake_models-BUILD.bazel"],
     )
 
 _drake_models_repository = repository_rule(

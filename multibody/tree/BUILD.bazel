@@ -1,10 +1,10 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
 load(
     "//tools/skylark:drake_cc.bzl",
     "drake_cc_googletest",
     "drake_cc_library",
     "drake_cc_package_library",
 )
-load("//tools/lint:lint.bzl", "add_lint_tests")
 
 package(
     default_visibility = ["//visibility:public"],
@@ -23,7 +23,6 @@ drake_cc_package_library(
         ":rotational_inertia",
         ":scoped_name",
         ":spatial_inertia",
-        ":string_view_map_key",
         ":unit_inertia",
     ],
 )
@@ -42,7 +41,9 @@ drake_cc_library(
 
 drake_cc_library(
     name = "multibody_tree_topology",
-    srcs = [],
+    srcs = [
+        "multibody_tree_topology.cc",
+    ],
     hdrs = [
         "multibody_tree_topology.h",
     ],
@@ -74,15 +75,6 @@ drake_cc_library(
         "//multibody/math:spatial_algebra",
         "//systems/framework:leaf_context",
     ],
-)
-
-drake_cc_library(
-    name = "string_view_map_key",
-    srcs = [],
-    hdrs = [
-        "string_view_map_key.h",
-    ],
-    deps = [],
 )
 
 drake_cc_library(
@@ -129,7 +121,6 @@ drake_cc_library(
     ],
     hdrs = [
         "ball_rpy_joint.h",
-        "body.h",
         "body_node.h",
         "body_node_impl.h",
         "body_node_world.h",
@@ -182,10 +173,10 @@ drake_cc_library(
         ":multibody_tree_indexes",
         ":scoped_name",
         ":spatial_inertia",
-        ":string_view_map_key",
         "//common:default_scalars",
         "//common:name_value",
         "//common:nice_type_name",
+        "//common:string_container",
         "//common:unused",
         "//math:geometric_transform",
         "//multibody/topology:multibody_graph",
@@ -267,6 +258,7 @@ drake_cc_library(
     hdrs = ["geometry_spatial_inertia.h"],
     deps = [
         ":spatial_inertia",
+        "//common:overloaded",
         "//geometry:shape_specification",
         "//geometry/proximity:make_mesh_from_vtk",
         "//geometry/proximity:obj_to_surface_mesh",
@@ -423,13 +415,6 @@ drake_cc_googletest(
         "//common/test_utilities:expect_throws_message",
         "//math:geometric_transform",
         "//math:gradient",
-    ],
-)
-
-drake_cc_googletest(
-    name = "string_view_map_key_test",
-    deps = [
-        ":string_view_map_key",
     ],
 )
 
@@ -622,6 +607,7 @@ drake_cc_googletest(
     name = "revolute_joint_test",
     deps = [
         ":tree",
+        "//common/test_utilities:expect_throws_message",
     ],
 )
 

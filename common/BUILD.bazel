@@ -1,3 +1,5 @@
+load("//tools/install:install.bzl", "install")
+load("//tools/lint:lint.bzl", "add_lint_tests")
 load(
     "//tools/skylark:drake_cc.bzl",
     "drake_cc_binary",
@@ -11,8 +13,6 @@ load(
     "drake_py_binary",
     "drake_py_unittest",
 )
-load("//tools/install:install.bzl", "install")
-load("//tools/lint:lint.bzl", "add_lint_tests")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -55,6 +55,7 @@ drake_cc_package_library(
         ":scoped_singleton",
         ":sha256",
         ":sorted_pair",
+        ":string_container",
         ":temp_directory",
         ":timer",
         ":type_safe_index",
@@ -533,6 +534,17 @@ drake_cc_library(
 )
 
 drake_cc_library(
+    name = "string_container",
+    hdrs = [
+        "string_hash.h",
+        "string_map.h",
+        "string_set.h",
+        "string_unordered_map.h",
+        "string_unordered_set.h",
+    ],
+)
+
+drake_cc_library(
     name = "timer",
     srcs = ["timer.cc"],
     hdrs = ["timer.h"],
@@ -758,42 +770,6 @@ drake_cc_googletest(
     deps = [
         ":essential",
     ],
-)
-
-# Functional test of DRAKE_ASSERT at compile time.
-drake_cc_test(
-    name = "drake_assert_test_compile",
-    deps = [
-        ":essential",
-        ":unused",
-    ],
-)
-
-# Functional test that mistyped DRAKE_ASSERTs will fail to compile.
-sh_test(
-    name = "drake_assert_test_compile_variants",
-    size = "small",
-    srcs = ["test/drake_assert_test_compile_variants.sh"],
-    args = [
-        "$(location //tools/cc_toolchain:capture_cc.env)",
-        "$(location :test/drake_assert_test_compile.cc)",
-    ],
-    data = [
-        "drake_assert.h",
-        "test/drake_assert_test_compile.cc",
-        "unused.h",
-        "//tools/cc_toolchain:capture_cc.env",
-        "//tools/cc_toolchain:toolchain_deps",
-    ],
-    # Fails when run under Valgrind tools.
-    tags = ["no_valgrind_tools"],
-)
-
-# TODO(eric.cousineau): Remove this alias and update `issue_template.md` to
-# use the actual target name after 2018/10/31.
-alias(
-    name = "print_host_settings",
-    actual = "//tools/cc_toolchain:print_host_settings",
 )
 
 drake_cc_googletest(
@@ -1071,6 +1047,14 @@ drake_cc_googletest(
         "//common/test_utilities:eigen_matrix_compare",
         "//common/test_utilities:expect_no_throw",
         "//common/test_utilities:random_polynomial_matrix",
+    ],
+)
+
+drake_cc_googletest(
+    name = "string_container_test",
+    deps = [
+        ":string_container",
+        "//common/test_utilities:limit_malloc",
     ],
 )
 

@@ -199,8 +199,12 @@ void MosekSolver::DoSolve(const MathematicalProgram& prog,
   }
 
   // Add linear matrix inequality constraints.
+  std::unordered_map<Binding<LinearMatrixInequalityConstraint>, MSKint64t>
+      lmi_acc_indices;
+  // TODO(hongkai.dai): use lmi_acc_indices to return the dual solution of LMI
+  // constraints.
   if (rescode == MSK_RES_OK) {
-    rescode = impl.AddLinearMatrixInequalityConstraint(prog);
+    rescode = impl.AddLinearMatrixInequalityConstraint(prog, &lmi_acc_indices);
   }
 
   // Add exponential cone constraints.
@@ -215,7 +219,7 @@ void MosekSolver::DoSolve(const MathematicalProgram& prog,
   MSKsoltypee solution_type;
   if (with_integer_or_binary_variable) {
     solution_type = MSK_SOL_ITG;
-  } else if (prog.quadratic_costs().empty() &&
+  } else if (prog.quadratic_costs().empty() && prog.l2norm_costs().empty() &&
              prog.quadratic_constraints().empty() &&
              prog.lorentz_cone_constraints().empty() &&
              prog.rotated_lorentz_cone_constraints().empty() &&

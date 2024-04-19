@@ -3,7 +3,6 @@
 
 #include <gtest/gtest.h>
 
-#include "drake/common/find_resource.h"
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/multibody/contact_solvers/contact_solver_results.h"
 #include "drake/multibody/contact_solvers/sap/sap_contact_problem.h"
@@ -152,20 +151,8 @@ class KukaIiwaArmTests : public ::testing::Test {
     const int nv = plant_.num_velocities();
     MatrixXd A(nv, nv);
     plant_.CalcMassMatrix(*context_, &A);
-    // Include term due to the implicit treatment of dissipation.
-    VectorXd damping = VectorXd::Zero(plant_.num_velocities());
-    for (JointIndex joint_index(0); joint_index < plant_.num_joints();
-         ++joint_index) {
-      const Joint<double>& joint = plant_.get_joint(joint_index);
-      if (joint.num_velocities() > 0) {  // skip welds.
-        const VectorXd& joint_damping = joint.damping_vector();
-        // For this model we expect 1 DOF revolute and prismatic joints only.
-        EXPECT_EQ(joint_damping.size(), 1);
-        EXPECT_EQ(joint.num_velocities(), 1);
-        damping(joint.velocity_start()) = joint_damping(0);
-      }
-    }
-    A.diagonal() += plant_.time_step() * damping;
+    A.diagonal() +=
+        plant_.time_step() * plant_.EvalJointDampingCache(*context_);
     return A;
   }
 
@@ -258,21 +245,17 @@ class KukaIiwaArmTests : public ::testing::Test {
   std::vector<ModelInstanceIndex> LoadIiwaWithGripper(
       MultibodyPlant<double>* plant) const {
     DRAKE_DEMAND(plant != nullptr);
-    const char kArmFilePath[] =
-        "drake/manipulation/models/iiwa_description/urdf/"
-        "iiwa14_no_collision.urdf";
-
-    const char kWsg50FilePath[] =
-        "drake/manipulation/models/wsg_50_description/sdf/schunk_wsg_50.sdf";
+    const char kArmUrl[] =
+        "package://drake_models/iiwa_description/urdf/iiwa14_no_collision.urdf";
+    const char kWsg50Url[] =
+        "package://drake_models/wsg_50_description/sdf/schunk_wsg_50.sdf";
 
     Parser parser(plant);
     parser.SetAutoRenaming(true);
-    ModelInstanceIndex arm_model =
-        parser.AddModels(FindResourceOrThrow(kArmFilePath)).at(0);
+    ModelInstanceIndex arm_model = parser.AddModelsFromUrl(kArmUrl).at(0);
 
     // Add the gripper.
-    ModelInstanceIndex gripper_model =
-        parser.AddModels(FindResourceOrThrow(kWsg50FilePath)).at(0);
+    ModelInstanceIndex gripper_model = parser.AddModelsFromUrl(kWsg50Url).at(0);
 
     const auto& base_body = plant->GetBodyByName("base", arm_model);
     const auto& end_effector = plant->GetBodyByName("iiwa_link_7", arm_model);
@@ -289,7 +272,7 @@ class KukaIiwaArmTests : public ::testing::Test {
                              const VectorX<double>& gear_ratios) const {
     DRAKE_DEMAND(plant != nullptr);
     int local_joint_index = 0;
-    for (JointActuatorIndex index(0); index < plant->num_actuators(); ++index) {
+    for (JointActuatorIndex index : plant->GetJointActuatorIndices()) {
       JointActuator<double>& joint_actuator =
           plant->get_mutable_joint_actuator(index);
       if (std::count(models.begin(), models.end(),
@@ -315,22 +298,30 @@ class KukaIiwaArmTests : public ::testing::Test {
         // Arbitrary position within position limits.
         const double ql = revolute_joint.position_lower_limit();
         const double qu = revolute_joint.position_upper_limit();
-        const double w = joint_index / kNumJoints;  // Number in (0,1).
-        const double q = w * ql + (1.0 - w) * qu;   // q in (ql, qu)
+        const double w = 1. * revolute_joint.velocity_start() /
+                         kNumJoints;               // Number in [0,1).
+        const double q = w * ql + (1.0 - w) * qu;  // q in (ql, qu)
         revolute_joint.set_angle(context, q);
         // Arbitrary velocity.
         revolute_joint.set_angular_rate(context, 0.5 * joint_index);
+        // Set damping.
+        revolute_joint.SetDamping(
+            context, kJointDamping(revolute_joint.velocity_start()));
       } else if (joint.type_name() == "prismatic") {
         const PrismaticJoint<double>& prismatic_joint =
             dynamic_cast<const PrismaticJoint<double>&>(joint);
         // Arbitrary position within position limits.
         const double ql = prismatic_joint.position_lower_limit();
         const double qu = prismatic_joint.position_upper_limit();
-        const double w = joint_index / kNumJoints;  // Number in (0,1).
-        const double q = w * ql + (1.0 - w) * qu;   // q in (ql, qu)
+        const double w = 1. * prismatic_joint.velocity_start() /
+                         kNumJoints;               // Number in [0,1).
+        const double q = w * ql + (1.0 - w) * qu;  // q in (ql, qu)
         prismatic_joint.set_translation(context, q);
         // Arbitrary velocity.
         prismatic_joint.set_translation_rate(context, 0.5 * joint_index);
+        // Set damping.
+        prismatic_joint.SetDamping(
+            context, kJointDamping(prismatic_joint.velocity_start()));
       }
     }
   }
@@ -340,6 +331,7 @@ class KukaIiwaArmTests : public ::testing::Test {
   const double kTimeStep{0.015};
   const VectorXd kRotorInertias{VectorXd::LinSpaced(kNumJoints, 0.1, 12.0)};
   const VectorXd kGearRatios{VectorXd::LinSpaced(kNumJoints, 1.5, 100.0)};
+  const VectorXd kJointDamping{VectorXd::LinSpaced(kNumJoints, 0.3, 30)};
   const double kCouplerGearRatio{-1.5};
   const double kCouplerOffset{3.1};
   MultibodyPlant<double> plant_{kTimeStep};

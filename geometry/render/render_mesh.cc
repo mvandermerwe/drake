@@ -94,7 +94,8 @@ RenderMaterial MakeMaterialFromMtl(const tinyobj::material_t& mat,
 
 vector<RenderMesh> LoadRenderMeshesFromObj(
     const std::filesystem::path& obj_path, const GeometryProperties& properties,
-    const Rgba& default_diffuse, const DiagnosticPolicy& policy) {
+    const std::optional<Rgba>& default_diffuse,
+    const DiagnosticPolicy& policy) {
   tinyobj::ObjReaderConfig config;
   config.triangulate = true;
   config.vertex_color = false;
@@ -233,7 +234,7 @@ vector<RenderMesh> LoadRenderMeshesFromObj(
           // increment it without worry.
           ++material_uvs[mat_index];
         }
-        if (obj_vertex_to_new_vertex.count(obj_indices) == 0) {
+        if (!obj_vertex_to_new_vertex.contains(obj_indices)) {
           obj_vertex_to_new_vertex[obj_indices] =
               static_cast<int>(positions.size());
           /* Guarantee that the positions.size() == normals.size() == uvs.size()
@@ -264,8 +265,8 @@ vector<RenderMesh> LoadRenderMeshesFromObj(
   DRAKE_DEMAND(positions.size() == uvs.size());
 
   /* Now we need to partition the prepped geometry data. Each material used
-   will lead to a unique `RenderMesh` and `RenderMaterial`. Note: the obj may
-   have declared distinct *objects*. We are erasing that distinction as
+   will lead to a unique `RenderMesh` and possibly a `RenderMaterial`. Note: the
+   obj may have declared distinct *objects*. We are erasing that distinction as
    irrelevant for rendering the mesh as a rigid structure. */
   vector<RenderMesh> meshes;
   for (const auto& [mat_index, tri_indices] : material_triangles) {
@@ -279,7 +280,7 @@ vector<RenderMesh> LoadRenderMeshesFromObj(
     if (mat_index == -1) {
       /* This is the default material. No material was assigned to the faces.
        We'll apply the fallback logic. */
-      mesh_data.material = MakeMeshFallbackMaterial(
+      mesh_data.material = MaybeMakeMeshFallbackMaterial(
           properties, obj_path, default_diffuse, policy, mesh_data.uv_state);
     } else {
       mesh_data.material =
@@ -298,7 +299,7 @@ vector<RenderMesh> LoadRenderMeshesFromObj(
     for (const auto& t : tri_indices) {
       const auto& tri = triangles[t];
       for (int i = 0; i < 3; ++i) {
-        if (vertex_index_full_to_part.count(tri[i]) == 0) {
+        if (!vertex_index_full_to_part.contains(tri[i])) {
           vertex_index_full_to_part[tri(i)] =
               static_cast<indices_uint_t>(vertex_index_full_to_part.size());
         }
@@ -332,11 +333,10 @@ vector<RenderMesh> LoadRenderMeshesFromObj(
 
 RenderMesh MakeRenderMeshFromTriangleSurfaceMesh(
     const TriangleSurfaceMesh<double>& mesh,
-    const GeometryProperties& properties, const Rgba& default_diffuse,
-    const DiagnosticPolicy& policy) {
+    const GeometryProperties& properties, const DiagnosticPolicy& policy) {
   RenderMesh result;
-  result.material = MakeMeshFallbackMaterial(properties, "", default_diffuse,
-                                             policy, UvState::kNone);
+  result.material =
+      MaybeMakeMeshFallbackMaterial(properties, "", {}, policy, UvState::kNone);
   const int vertex_count = mesh.num_vertices();
   const int triangle_count = mesh.num_triangles();
   result.positions.resize(vertex_count, 3);
@@ -363,6 +363,48 @@ RenderMesh MakeRenderMeshFromTriangleSurfaceMesh(
     result.normals.row(i).normalize();
   }
   return result;
+}
+
+RenderMesh MakeFacetedRenderMeshFromTriangleSurfaceMesh(
+    const TriangleSurfaceMesh<double>& mesh,
+    const GeometryProperties& properties, const DiagnosticPolicy& policy) {
+  // The simple solution is to create a *new* mesh where every triangle has its
+  // own vertices and then pass to MakeRenderMeshFromTriangleSurfaceMesh().
+  // If this ever becomes an onerous burden, we can do that directly into the
+  // RenderMesh.
+  std::vector<Vector3d> vertices;
+  vertices.reserve(mesh.num_triangles() * 3);
+  std::vector<SurfaceTriangle> triangles;
+  vertices.reserve(mesh.num_triangles());
+  for (const SurfaceTriangle& t_in : mesh.triangles()) {
+    const int v_index = ssize(vertices);
+    triangles.emplace_back(v_index, v_index + 1, v_index + 2);
+    vertices.push_back(mesh.vertex(t_in.vertex(0)));
+    vertices.push_back(mesh.vertex(t_in.vertex(1)));
+    vertices.push_back(mesh.vertex(t_in.vertex(2)));
+  }
+  const TriangleSurfaceMesh<double> faceted(std::move(triangles),
+                                            std::move(vertices));
+  return MakeRenderMeshFromTriangleSurfaceMesh(faceted, properties, policy);
+}
+
+TriangleSurfaceMesh<double> MakeTriangleSurfaceMesh(
+    const RenderMesh& render_mesh) {
+  const int num_vertices = render_mesh.positions.rows();
+  const int num_triangles = render_mesh.indices.rows();
+  std::vector<Vector3<double>> vertices;
+  vertices.reserve(num_vertices);
+  std::vector<SurfaceTriangle> triangles;
+  triangles.reserve(num_triangles);
+  for (int v = 0; v < num_vertices; ++v) {
+    vertices.emplace_back(render_mesh.positions.row(v));
+  }
+  for (int t = 0; t < num_triangles; ++t) {
+    triangles.emplace_back(render_mesh.indices(t, 0), render_mesh.indices(t, 1),
+                           render_mesh.indices(t, 2));
+  }
+  return TriangleSurfaceMesh<double>(
+      TriangleSurfaceMesh(std::move(triangles), std::move(vertices)));
 }
 
 }  // namespace internal

@@ -4,7 +4,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "drake/common/find_resource.h"
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/geometry/proximity/polygon_surface_mesh.h"
 #include "drake/geometry/proximity/triangle_surface_mesh.h"
@@ -335,9 +334,9 @@ class MultibodyPlantHydroelasticTractionTests
     SceneGraph<double>* scene_graph;
     std::tie(plant_, scene_graph) = AddMultibodyPlantSceneGraph(&builder, 0.0);
     MultibodyPlant<double>& plant = *plant_;
-    const std::string full_name = FindResourceOrThrow(
-        "drake/multibody/plant/test/block_on_halfspace.sdf");
-    Parser(&plant, scene_graph).AddModels(full_name);
+    Parser(&plant, scene_graph)
+        .AddModelsFromUrl(
+            "package://drake/multibody/plant/test/block_on_halfspace.sdf");
 
     plant.Finalize();
     diagram_ = builder.Build();
@@ -759,7 +758,7 @@ GTEST_TEST(HydroelasticTractionCalculatorTest,
   std::vector<AutoDiffXd> values{0, 0, 0};
   auto field = std::make_unique<
       geometry::TriangleSurfaceMeshFieldLinear<AutoDiffXd, AutoDiffXd>>(
-      std::move(values), mesh_W.get(), false);
+      std::move(values), mesh_W.get(), geometry::MeshGradientMode::kNone);
   // N.B. get_new_id() makes no guarantee on the order.
   // Since the surface normal follows the convention that it points from B into
   // A, we generate a pair of id's such that idA < idB to ensure that

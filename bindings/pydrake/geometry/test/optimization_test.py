@@ -271,6 +271,23 @@ class TestGeometryOptimization(unittest.TestCase):
         h_half_box3 = h_half_box_intersect_unit_box.ReduceInequalities(
             tol=1E-9)
 
+        # Check SimplifyByIncrementalFaceTranslation binding with
+        # default input parameters.
+        h6 = h_box.SimplifyByIncrementalFaceTranslation(
+            min_volume_ratio=0.1, do_affine_transformation=True,
+            max_iterations=10, points_to_contain=np.empty((3, 0)),
+            intersecting_polytopes=[], keep_whole_intersection=False,
+            intersection_padding=0.1, random_seed=0)
+        self.assertIsInstance(h6, mut.HPolyhedron)
+        self.assertEqual(h6.ambient_dimension(), 3)
+
+        # Check Simplify MaximumVolumeInscribedAffineTransformation binding
+        # with default input parameters.
+        h7 = h6.MaximumVolumeInscribedAffineTransformation(
+            circumbody=h_box)
+        self.assertIsInstance(h7, mut.HPolyhedron)
+        self.assertEqual(h7.ambient_dimension(), 3)
+
         # This polyhedron is intentionally constructed to be an empty set.
         A_empty = np.vstack([np.eye(3), -np.eye(3)])
         b_empty = -np.ones(6)
@@ -281,8 +298,16 @@ class TestGeometryOptimization(unittest.TestCase):
         vpoly = mut.VPolytope(np.array(
             [[0., 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]))
         hpoly = mut.HPolyhedron(vpoly=vpoly)
+        hpoly = mut.HPolyhedron(vpoly=vpoly, tol=1E-9)
         self.assertEqual(hpoly.ambient_dimension(), 3)
         self.assertEqual(hpoly.A().shape, (4, 3))
+
+        prog = MathematicalProgram()
+        x = prog.NewContinuousVariables(1)
+        prog.AddLinearConstraint(x[0] >= 0)
+        hpoly = mut.HPolyhedron(prog=prog)
+        self.assertEqual(hpoly.ambient_dimension(), 1)
+        self.assertEqual(hpoly.A().shape, (1, 1))
 
     def test_hyper_ellipsoid(self):
         mut.Hyperellipsoid()
@@ -381,6 +406,11 @@ class TestGeometryOptimization(unittest.TestCase):
         np.testing.assert_array_equal(hpoly.A(), box.A())
         np.testing.assert_array_equal(hpoly.b(), box.b())
         assert_pickle(self, rect, lambda S: np.vstack((S.lb(), S.ub())))
+
+        rect2 = mut.Hyperrectangle(lb=-2*self.b, ub=0.5*self.b)
+        intersection = rect.MaybeGetIntersection(rect2)
+        np.testing.assert_array_equal(intersection.lb(), -self.b)
+        np.testing.assert_array_equal(intersection.ub(), 0.5*self.b)
 
         other = mut.VPolytope(np.eye(2))
         bbox = mut.Hyperrectangle.MaybeCalcAxisAlignedBoundingBox(set=other)
@@ -626,6 +656,7 @@ class TestGeometryOptimization(unittest.TestCase):
         options.starting_ellipse = mut.Hyperellipsoid.MakeUnitBall(3)
         options.bounding_region = mut.HPolyhedron.MakeBox(
             lb=[-6, -6, -6], ub=[6, 6, 6])
+        options.solver_options = SolverOptions()
         self.assertNotIn("object at 0x", repr(options))
         region = mut.Iris(
             obstacles=obstacles, sample=[2, 3.4, 5],
@@ -841,15 +872,6 @@ class TestCspaceFreePolytope(unittest.TestCase):
                      <collision>
                        <geometry><box size="0.1 0.1 0.1"/></geometry>
                      </collision>
-                      <geometry>
-                          <cylinder length="0.1" radius="0.2"/>
-                     </geometry>
-                     <geometry>
-                          <capsule length="0.1" radius="0.2"/>
-                     </geometry>
-                     <geometry>
-                          <sphere radius="0.2"/>
-                     </geometry>
                    </link>
                    <link name="unmovable">
                      <collision>
@@ -1246,3 +1268,19 @@ class TestCspaceFreePolytope(unittest.TestCase):
                                epsilon=1e-5)
         mut.CheckIfSatisfiesConvexityRadius(convex_set=big_convex_set,
                                             continuous_revolute_joints=[0])
+
+    def test_calc_pairwise_intersections(self):
+        sets_A = [mut.VPolytope(np.array([[0, 4]])),
+                  mut.VPolytope(np.array([[2, 6]]))]
+        sets_B = [mut.VPolytope(np.array([[1, 5]]) - (2 * np.pi))]
+        out = mut.CalcPairwiseIntersections(convex_sets_A=sets_A,
+                                            convex_sets_B=sets_B,
+                                            continuous_revolute_joints=[0])
+        self.assertIsInstance(out, list)
+        self.assertEqual(len(out), 2)
+        self.assertIsInstance(out[0], tuple)
+        out2 = mut.CalcPairwiseIntersections(convex_sets=sets_A,
+                                             continuous_revolute_joints=[0])
+        self.assertIsInstance(out, list)
+        self.assertEqual(len(out), 2)
+        self.assertIsInstance(out[0], tuple)

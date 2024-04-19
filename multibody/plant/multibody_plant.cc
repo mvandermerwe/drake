@@ -264,7 +264,7 @@ std::string GetScopedName(const MultibodyPlant<T>& plant,
 // controlled.
 template <typename T>
 bool AnyActuatorHasPdControl(const MultibodyPlant<T>& plant) {
-  for (JointActuatorIndex a(0); a < plant.num_actuators(); ++a) {
+  for (JointActuatorIndex a : plant.GetJointActuatorIndices()) {
     if (plant.get_joint_actuator(a).has_controller()) return true;
   }
   return false;
@@ -276,7 +276,7 @@ template <typename T>
 int NumOfPdControlledActuators(const MultibodyPlant<T>& plant,
                                ModelInstanceIndex model_instance) {
   int num_actuators = 0;
-  for (JointActuatorIndex a(0); a < plant.num_actuators(); ++a) {
+  for (JointActuatorIndex a : plant.GetJointActuatorIndices()) {
     const JointActuator<T>& actuator = plant.get_joint_actuator(a);
     if (actuator.model_instance() == model_instance &&
         actuator.has_controller()) {
@@ -450,7 +450,7 @@ bool MultibodyPlant<T>::GetConstraintActiveStatus(
   this->ValidateContext(context);
   const std::map<MultibodyConstraintId, bool>& constraint_active_status =
       this->GetConstraintActiveStatus(context);
-  DRAKE_THROW_UNLESS(constraint_active_status.count(id) > 0);
+  DRAKE_THROW_UNLESS(constraint_active_status.contains(id));
   return constraint_active_status.at(id);
 }
 
@@ -462,7 +462,7 @@ void MultibodyPlant<T>::SetConstraintActiveStatus(systems::Context<T>* context,
   this->ValidateContext(context);
   std::map<MultibodyConstraintId, bool>& constraint_active_status =
       this->GetMutableConstraintActiveStatus(context);
-  DRAKE_THROW_UNLESS(constraint_active_status.count(id) > 0);
+  DRAKE_THROW_UNLESS(constraint_active_status.contains(id));
   constraint_active_status[id] = status;
 }
 
@@ -804,6 +804,11 @@ const JointActuator<T>& MultibodyPlant<T>::AddJointActuator(
 }
 
 template <typename T>
+void MultibodyPlant<T>::RemoveJointActuator(const JointActuator<T>& actuator) {
+  this->mutable_tree().RemoveJointActuator(actuator);
+}
+
+template <typename T>
 geometry::SourceId MultibodyPlant<T>::RegisterAsSourceForSceneGraph(
     SceneGraph<T>* scene_graph) {
   DRAKE_THROW_UNLESS(scene_graph != nullptr);
@@ -1118,17 +1123,11 @@ void MultibodyPlant<T>::RenameModelInstance(ModelInstanceIndex model_instance,
     // alone.
     auto& inspector = scene_graph_->model_inspector();
 
-    // TODO(rpoyner-tri): replace with c++ built-in starts_with once we drop
-    // C++17 support.
-    auto starts_with = [](const std::string& str, const std::string& prefix) {
-      return str.compare(0, prefix.size(), prefix) == 0;
-    };
-
     const std::string old_prefix(old_name + "::");
     const std::string new_prefix(name + "::");
     auto maybe_make_new_name = [&](auto id) {
       std::string existing_name(inspector.GetName(id));
-      if (starts_with(existing_name, old_prefix)) {
+      if (existing_name.starts_with(old_prefix)) {
         // Replace old prefix with new prefix.
         return new_prefix + existing_name.substr(old_prefix.size());
       }
@@ -1286,13 +1285,12 @@ void MultibodyPlant<T>::FinalizePlantOnly() {
 template <typename T>
 MatrixX<T> MultibodyPlant<T>::MakeActuationMatrix() const {
   MatrixX<T> B = MatrixX<T>::Zero(num_velocities(), num_actuated_dofs());
-  for (JointActuatorIndex actuator_index(0); actuator_index < num_actuators();
-       ++actuator_index) {
+  for (JointActuatorIndex actuator_index : GetJointActuatorIndices()) {
     const JointActuator<T>& actuator = get_joint_actuator(actuator_index);
     // This method assumes actuators on single dof joints. Assert this
     // condition.
     DRAKE_DEMAND(actuator.joint().num_velocities() == 1);
-    B(actuator.joint().velocity_start(), int{actuator.index()}) = 1;
+    B(actuator.joint().velocity_start(), actuator.input_start()) = 1;
   }
   return B;
 }
@@ -1303,14 +1301,13 @@ MultibodyPlant<T>::MakeActuationMatrixPseudoinverse() const {
   // We leverage here the assumption that B (the actuation matrix) is a
   // permutation matrix, so Bᵀ is the pseudoinverse.
   std::vector<Eigen::Triplet<double>> triplets;
-  for (JointActuatorIndex actuator_index(0); actuator_index < num_actuators();
-       ++actuator_index) {
+  for (JointActuatorIndex actuator_index : GetJointActuatorIndices()) {
     const JointActuator<T>& actuator = get_joint_actuator(actuator_index);
     // This method assumes actuators on single dof joints. Assert this
     // condition.
     DRAKE_DEMAND(actuator.joint().num_velocities() == 1);
     triplets.push_back(Eigen::Triplet<double>(
-        int{actuator.index()}, actuator.joint().velocity_start(), 1.0));
+        actuator.input_start(), actuator.joint().velocity_start(), 1.0));
   }
 
   Eigen::SparseMatrix<double> Bplus(num_actuated_dofs(), num_velocities());
@@ -1740,10 +1737,8 @@ std::vector<std::string> MultibodyPlant<T>::GetActuatorNames(
   DRAKE_MBP_THROW_IF_NOT_FINALIZED();
   std::vector<std::string> names(num_actuators());
 
-  for (int actuator_index = 0; actuator_index < num_actuators();
-       ++actuator_index) {
-    const JointActuator<T>& actuator =
-        get_joint_actuator(JointActuatorIndex(actuator_index));
+  for (JointActuatorIndex actuator_index : GetJointActuatorIndices()) {
+    const JointActuator<T>& actuator = get_joint_actuator(actuator_index);
     const std::string prefix =
         add_model_instance_prefix
             ? fmt::format("{}_",
@@ -2348,13 +2343,12 @@ void MultibodyPlant<T>::AddJointActuationForces(
   DRAKE_DEMAND(forces->size() == num_velocities());
   if (num_actuators() > 0) {
     const VectorX<T> u = AssembleActuationInput(context);
-    for (JointActuatorIndex actuator_index(0); actuator_index < num_actuators();
-         ++actuator_index) {
+    for (JointActuatorIndex actuator_index : GetJointActuatorIndices()) {
       const JointActuator<T>& actuator = get_joint_actuator(actuator_index);
       const Joint<T>& joint = actuator.joint();
       // We only support actuators on single dof joints for now.
       DRAKE_DEMAND(joint.num_velocities() == 1);
-      (*forces)[joint.velocity_start()] += u[actuator_index];
+      (*forces)[joint.velocity_start()] += u[actuator.input_start()];
     }
   }
 }

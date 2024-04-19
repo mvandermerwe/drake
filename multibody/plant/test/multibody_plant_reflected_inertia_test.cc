@@ -4,7 +4,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "drake/common/find_resource.h"
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/multibody/parsing/parser.h"
 #include "drake/multibody/plant/multibody_plant.h"
@@ -46,7 +45,10 @@ class MultibodyPlantReflectedInertiaTests : public ::testing::Test {
   // @pre It is expected that:
   //   rotor_inertias.size() == gear_ratios.size() == plant_ri_.num_actuators()
   //   and that the index in the vector corresponds with the joint actuator
-  //   index.
+  //   index. For consistency with the rest of Drake we still call
+  //   GetJointActuatorIndices() below to iterate over the actuators, but the
+  //   returned indices will always start from 0 and count up by 1 each with no
+  //   gaps because no actuators have been removed.
   //
   // See the section 'Reflected Inertia' in documentation for
   // drake::multibody::JointActuator for more details.
@@ -113,18 +115,16 @@ class MultibodyPlantReflectedInertiaTests : public ::testing::Test {
  private:
   void LoadIiwaWithGripper(MultibodyPlant<double>* plant) {
     DRAKE_DEMAND(plant != nullptr);
-    const char kArmSdfPath[] =
-        "drake/manipulation/models/iiwa_description/sdf/"
-        "iiwa14_no_collision.sdf";
-
-    const char kWsg50SdfPath[] =
-        "drake/manipulation/models/wsg_50_description/sdf/schunk_wsg_50.sdf";
+    const char kArmSdfUrl[] =
+        "package://drake_models/iiwa_description/sdf/iiwa14_no_collision.sdf";
+    const char kWsg50SdfUrl[] =
+        "package://drake_models/wsg_50_description/sdf/schunk_wsg_50.sdf";
 
     Parser parser(plant);
-    arm_model = parser.AddModels(FindResourceOrThrow(kArmSdfPath)).at(0);
+    arm_model = parser.AddModelsFromUrl(kArmSdfUrl).at(0);
 
     // Add the gripper.
-    gripper_model = parser.AddModels(FindResourceOrThrow(kWsg50SdfPath)).at(0);
+    gripper_model = parser.AddModelsFromUrl(kWsg50SdfUrl).at(0);
 
     const auto& base_body = plant->GetBodyByName("iiwa_link_0", arm_model);
     const auto& end_effector = plant->GetBodyByName("iiwa_link_7", arm_model);
@@ -137,7 +137,7 @@ class MultibodyPlantReflectedInertiaTests : public ::testing::Test {
                              const VectorX<double>& rotor_inertias,
                              const VectorX<double>& gear_ratios) {
     DRAKE_DEMAND(plant != nullptr);
-    for (JointActuatorIndex index(0); index < plant->num_actuators(); ++index) {
+    for (JointActuatorIndex index : plant->GetJointActuatorIndices()) {
       JointActuator<double>& joint_actuator =
           plant->get_mutable_joint_actuator(index);
       joint_actuator.set_default_rotor_inertia(rotor_inertias(int{index}));
@@ -147,7 +147,7 @@ class MultibodyPlantReflectedInertiaTests : public ::testing::Test {
 
   void SetReflectedInertiaToZero(MultibodyPlant<double>* plant) {
     DRAKE_DEMAND(plant != nullptr);
-    for (JointActuatorIndex index(0); index < plant->num_actuators(); ++index) {
+    for (JointActuatorIndex index : plant->GetJointActuatorIndices()) {
       JointActuator<double>& joint_actuator =
           plant->get_mutable_joint_actuator(index);
       joint_actuator.set_default_rotor_inertia(0.0);
@@ -609,11 +609,10 @@ TEST_F(MultibodyPlantReflectedInertiaTests, DefaultParameters) {
   // Load the models.
   LoadBothModelsSetStateAndFinalize(rotor_inertias, gear_ratios);
 
-  for (JointActuatorIndex index(0); index < plant_ri_.num_actuators();
-       ++index) {
+  for (JointActuatorIndex index : plant_ri_.GetJointActuatorIndices()) {
     JointActuator<double>& joint_actuator =
         dynamic_cast<JointActuator<double>&>(
-            plant_ri_.get_mutable_joint_actuator(JointActuatorIndex(index)));
+            plant_ri_.get_mutable_joint_actuator(index));
 
     // Default gear ratio and rotor inertia end up in the context.
     EXPECT_EQ(joint_actuator.default_gear_ratio(),
@@ -622,11 +621,10 @@ TEST_F(MultibodyPlantReflectedInertiaTests, DefaultParameters) {
               joint_actuator.rotor_inertia(*context_ri_));
   }
 
-  for (JointActuatorIndex index(0); index < plant_ri_.num_actuators();
-       ++index) {
+  for (JointActuatorIndex index : plant_ri_.GetJointActuatorIndices()) {
     JointActuator<double>& joint_actuator =
         dynamic_cast<JointActuator<double>&>(
-            plant_ri_.get_mutable_joint_actuator(JointActuatorIndex(index)));
+            plant_ri_.get_mutable_joint_actuator(index));
     // Set the model parameters to something different.
     joint_actuator.set_default_gear_ratio(99);
     joint_actuator.set_default_rotor_inertia(100);
@@ -635,11 +633,10 @@ TEST_F(MultibodyPlantReflectedInertiaTests, DefaultParameters) {
   // Create a new default context.
   auto context = plant_ri_.CreateDefaultContext();
 
-  for (JointActuatorIndex index(0); index < plant_ri_.num_actuators();
-       ++index) {
+  for (JointActuatorIndex index : plant_ri_.GetJointActuatorIndices()) {
     JointActuator<double>& joint_actuator =
         dynamic_cast<JointActuator<double>&>(
-            plant_ri_.get_mutable_joint_actuator(JointActuatorIndex(index)));
+            plant_ri_.get_mutable_joint_actuator(index));
     // New default values should propagate to a new default context.
     EXPECT_EQ(joint_actuator.default_gear_ratio(),
               joint_actuator.gear_ratio(*context));

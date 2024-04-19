@@ -158,6 +158,9 @@ struct IrisOptions {
   control the total number of hit-and-run steps taken for each new random
   sample. */
   int mixing_steps{10};
+
+  /* The SolverOptions used in the optimization program. */
+  std::optional<solvers::SolverOptions> solver_options;
 };
 
 /** The IRIS (Iterative Region Inflation by Semidefinite programming) algorithm,
@@ -220,6 +223,10 @@ collisions in configuration space; each potential collision is
 probabilistically "certified" by restarting the nonlinear optimization from
 random initial seeds inside the candidate IRIS region until it fails to find a
 collision in `options.num_collision_infeasible_samples` consecutive attempts.
+
+This method constructs a single Iris region in the configuration space of
+@p plant. @see planning::IrisInConfigurationSpaceFromCliqueCover for a method to
+automatically cover the configuration space with multiple Iris regions.
 
 @param plant describes the kinematics of configuration space.  It must be
 connected to a SceneGraph in a systems::Diagram.

@@ -52,56 +52,29 @@ if(APPLE)
   endif()
   list(APPEND BAZELRC_IMPORTS "tools/macos-arch-${MACOS_ARCH}.bazelrc")
 else()
-  find_program(LSB_RELEASE_EXECUTABLE NAMES lsb_release)
-
-  if(NOT LSB_RELEASE_EXECUTABLE)
-    message(FATAL_ERROR "Could NOT find the lsb_release executable")
-  endif()
-
-  mark_as_advanced(LSB_RELEASE_EXECUTABLE)
-
-  execute_process(COMMAND "${LSB_RELEASE_EXECUTABLE}" --id --short
-    RESULT_VARIABLE LSB_RELEASE_ID_SHORT_RESULT_VARIABLE
-    OUTPUT_VARIABLE LSB_RELEASE_ID_SHORT_OUTPUT_VARIABLE
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-  )
-
-  if(LSB_RELEASE_ID_SHORT_RESULT_VARIABLE EQUAL 0)
-    set(UNIX_DISTRIBUTION_ID "${LSB_RELEASE_ID_SHORT_OUTPUT_VARIABLE}")
-  endif()
-
-  if(NOT UNIX_DISTRIBUTION_ID STREQUAL Ubuntu)
-    message(WARNING
-      "Distribution ${UNIX_DISTRIBUTION_ID} is NOT supported"
-    )
-  endif()
-
-  string(TOLOWER "${UNIX_DISTRIBUTION_ID}" UNIX_DISTRIBUTION_ID)
-
-  execute_process(COMMAND "${LSB_RELEASE_EXECUTABLE}" --codename --short
-    RESULT_VARIABLE LSB_RELEASE_CODENAME_SHORT_RESULT_VARIABLE
-    OUTPUT_VARIABLE LSB_RELEASE_CODENAME_SHORT_OUTPUT_VARIABLE
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-  )
-
-  if(LSB_RELEASE_CODENAME_SHORT_RESULT_VARIABLE EQUAL 0)
-    set(UNIX_DISTRIBUTION_CODENAME
-      "${LSB_RELEASE_CODENAME_SHORT_OUTPUT_VARIABLE}"
-    )
-  endif()
-
-  # The supported releases should match those listed in both
-  # doc/_pages/from_source.md and tools/workspace/os.bzl.
-  if(NOT UNIX_DISTRIBUTION_CODENAME MATCHES "^(focal|jammy|noble)$")
-    message(FATAL_ERROR
-      "Release ${UNIX_DISTRIBUTION_CODENAME} is NOT supported. Please use "
-      "Ubuntu 20.04 (Focal) or Ubuntu 22.04 (Jammy) or Ubuntu 24.04 (Noble)."
-    )
-  endif()
-
   list(APPEND BAZELRC_IMPORTS "tools/ubuntu.bazelrc")
-  list(APPEND BAZELRC_IMPORTS
-    "tools/ubuntu-${UNIX_DISTRIBUTION_CODENAME}.bazelrc")
+
+  find_program(LSB_RELEASE_EXECUTABLE NAMES lsb_release)
+  mark_as_advanced(LSB_RELEASE_EXECUTABLE)
+  if(NOT LSB_RELEASE_EXECUTABLE)
+    message(WARNING "Could NOT find the lsb_release executable")
+  else()
+    execute_process(COMMAND "${LSB_RELEASE_EXECUTABLE}" --codename --short
+      RESULT_VARIABLE LSB_RELEASE_CODENAME_SHORT_RESULT_VARIABLE
+      OUTPUT_VARIABLE UNIX_DISTRIBUTION_CODENAME
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(NOT LSB_RELEASE_CODENAME_SHORT_RESULT_VARIABLE EQUAL 0)
+      message(WARNING "Could NOT run the lsb_release executable")
+    else()
+      set(MAYBE_RC "tools/ubuntu-${UNIX_DISTRIBUTION_CODENAME}.bazelrc")
+      if(NOT EXISTS "${PROJECT_SOURCE_DIR}/${MAYBE_RC}")
+        message(WARNING "Could NOT find config file ${MAYBE_RC}")
+      else()
+        list(APPEND BAZELRC_IMPORTS "${MAYBE_RC}")
+      endif()
+    endif()
+  endif()
 endif()
 
 # The version passed to find_package(Bazel) should match the
@@ -128,8 +101,8 @@ endif()
 # The minimum compiler versions should match those listed in both
 # doc/_pages/from_source.md and tools/workspace/cc/repository.bzl.
 set(MINIMUM_APPLE_CLANG_VERSION 14)
-set(MINIMUM_CLANG_VERSION 12)
-set(MINIMUM_GNU_VERSION 9.3)
+set(MINIMUM_CLANG_VERSION 14)
+set(MINIMUM_GNU_VERSION 11)
 
 if(CMAKE_C_COMPILER_ID STREQUAL AppleClang)
   if(CMAKE_C_COMPILER_VERSION VERSION_LESS ${MINIMUM_APPLE_CLANG_VERSION})
@@ -218,19 +191,17 @@ endif()
 # standard nor CMAKE_CXX_FLAGS to Bazel, but we should.
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 
 # The supported Python major/minor versions should match those listed in
 # doc/_pages/from_source.md.
 if(APPLE)
   # The macOS python version should match what's listed in both the
   # tools/workspace/python/repository.bzl and doc/_pages/installation.md.
-  set(SUPPORTED_PYTHON_VERSION 3.11)
+  set(SUPPORTED_PYTHON_VERSION 3.12)
 else()
   if(UNIX_DISTRIBUTION_CODENAME STREQUAL noble)
     set(SUPPORTED_PYTHON_VERSION 3.11)
-  elseif(UNIX_DISTRIBUTION_CODENAME STREQUAL focal)
-    set(SUPPORTED_PYTHON_VERSION 3.8)
   else()  # UNIX_DISTRIBUTION_CODENAME := jammy
     set(SUPPORTED_PYTHON_VERSION 3.10)
   endif()
@@ -592,31 +563,33 @@ configure_file(cmake/bazel.rc.in drake_build_cwd/.bazelrc @ONLY)
 configure_file(cmake/WORKSPACE.in drake_build_cwd/WORKSPACE.bazel @ONLY)
 file(CREATE_LINK "${PROJECT_SOURCE_DIR}/.bazeliskrc" drake_build_cwd/.bazeliskrc SYMBOLIC)
 
-set(GIT_DIR "${PROJECT_SOURCE_DIR}/.git")
-set(GIT_REVISION HEAD)
-
 find_package(Git)
 
-if(GIT_FOUND AND EXISTS "${GIT_DIR}")
-  execute_process(COMMAND
-    "${GIT_EXECUTABLE}" "--git-dir=${GIT_DIR}" rev-parse HEAD
-    RESULT_VARIABLE GIT_REV_PARSE_RESULT_VARIABLE
-    OUTPUT_VARIABLE GIT_REV_PARSE_OUTPUT_VARIABLE
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-  )
-
-  if(GIT_REV_PARSE_RESULT_VARIABLE EQUAL 0)
-    set(GIT_REVISION "${GIT_REV_PARSE_OUTPUT_VARIABLE}")
-  endif()
-endif()
-
-string(TIMESTAMP BUILD_TIMESTAMP "%Y%m%d%H%M%S")
-
-configure_file(tools/install/libdrake/VERSION.TXT.in VERSION.TXT @ONLY)
+set(GIT_DIR "${PROJECT_SOURCE_DIR}/.git")
 
 execute_process(
   COMMAND "${Bazel_EXECUTABLE}" info --announce_rc
   WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/drake_build_cwd"
+)
+
+set(GENERATE_DRAKE_VERSION_ARGS)
+if(DEFINED DRAKE_VERSION_OVERRIDE)
+  list(APPEND GENERATE_DRAKE_VERSION_ARGS
+    "-DDRAKE_VERSION_OVERRIDE=${DRAKE_VERSION_OVERRIDE}")
+endif()
+if(DEFINED DRAKE_GIT_SHA_OVERRIDE)
+  list(APPEND GENERATE_DRAKE_VERSION_ARGS
+    "-DDRAKE_GIT_SHA_OVERRIDE=${DRAKE_GIT_SHA_OVERRIDE}")
+endif()
+
+add_custom_target(drake_version ALL
+  COMMAND "${CMAKE_COMMAND}"
+    ${GENERATE_DRAKE_VERSION_ARGS}
+    "-DGIT_DIR=${GIT_DIR}"
+    "-DGIT_EXECUTABLE=${GIT_EXECUTABLE}"
+    "-DINPUT_FILE=${PROJECT_SOURCE_DIR}/tools/install/libdrake/VERSION.TXT.in"
+    "-DOUTPUT_FILE=${PROJECT_BINARY_DIR}/VERSION.TXT"
+    -P "${PROJECT_SOURCE_DIR}/tools/install/libdrake/generate_version.cmake"
 )
 
 add_custom_target(drake_cxx_python ALL

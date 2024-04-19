@@ -1,10 +1,6 @@
+load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
 load("//tools/install:install.bzl", "install")
-load(
-    "//tools/skylark:pybind.bzl",
-    "drake_pybind_library",
-    "get_drake_py_installs",
-    "get_pybind_package_info",
-)
+load("//tools/jupyter:jupyter_py.bzl", "drake_jupyter_py_binary")
 load(
     "//tools/skylark:drake_cc.bzl",
     "drake_cc_library",
@@ -15,8 +11,12 @@ load(
     "drake_py_library",
     "drake_py_unittest",
 )
-load("//tools/jupyter:jupyter_py.bzl", "drake_jupyter_py_binary")
-load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
+load(
+    "//tools/skylark:pybind.bzl",
+    "drake_pybind_library",
+    "get_drake_py_installs",
+    "get_pybind_package_info",
+)
 load("//tools/skylark:test_tags.bzl", "vtk_test_tags")
 
 package(default_visibility = [
@@ -134,7 +134,6 @@ drake_pybind_library(
     cc_deps = [
         "//bindings/pydrake:documentation_pybind",
         "//bindings/pydrake/common:deprecation_pybind",
-        "//bindings/pydrake/common:eigen_geometry_pybind",
         "//bindings/pydrake/common:value_pybind",
     ],
     cc_srcs = ["rendering_py.cc"],
@@ -151,7 +150,6 @@ drake_pybind_library(
         "//bindings/pydrake:documentation_pybind",
         "//bindings/pydrake/common:cpp_template_pybind",
         "//bindings/pydrake/common:deprecation_pybind",
-        "//bindings/pydrake/common:eigen_geometry_pybind",
         "//bindings/pydrake/common:eigen_pybind",
         "//bindings/pydrake/common:serialize_pybind",
         "//bindings/pydrake/common:type_pack",
@@ -355,7 +353,7 @@ drake_jupyter_py_binary(
     name = "jupyter_widgets_examples",
     add_test_rule = 1,
     data = [
-        "//manipulation/models/ycb:models",
+        "@drake_models//:ycb",
     ],
     deps = [
         ":analysis_py",
@@ -438,7 +436,7 @@ drake_py_unittest(
 drake_py_unittest(
     name = "controllers_test",
     data = [
-        "//manipulation/models/iiwa_description:models",
+        "@drake_models//:iiwa_description",
     ],
     deps = [
         ":controllers_py",
@@ -475,7 +473,7 @@ drake_py_unittest(
     name = "planar_scenegraph_visualizer_test",
     data = [
         "//examples/multibody/cart_pole:models",
-        "//manipulation/models/iiwa_description:models",
+        "@drake_models//:iiwa_description",
     ],
     deps = [
         ":analysis_py",

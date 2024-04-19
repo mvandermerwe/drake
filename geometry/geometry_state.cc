@@ -15,6 +15,8 @@
 #include "drake/geometry/geometry_frame.h"
 #include "drake/geometry/geometry_instance.h"
 #include "drake/geometry/geometry_roles.h"
+#include "drake/geometry/proximity/make_convex_hull_mesh.h"
+#include "drake/geometry/proximity/volume_to_surface_mesh.h"
 #include "drake/geometry/proximity_engine.h"
 #include "drake/geometry/proximity_properties.h"
 #include "drake/geometry/render/render_engine.h"
@@ -25,11 +27,24 @@ namespace drake {
 namespace geometry {
 
 using internal::convert_to_double;
+using internal::DrivenTriangleMesh;
 using internal::FrameNameSet;
 using internal::HydroelasticType;
 using internal::InternalFrame;
 using internal::InternalGeometry;
+using internal::kComplianceType;
+using internal::kElastic;
+using internal::kFriction;
+using internal::kHcDissipation;
+using internal::kHydroGroup;
+using internal::kMaterialGroup;
+using internal::kPointStiffness;
+using internal::kRelaxationTime;
+using internal::kRezHint;
+using internal::kSlabThickness;
+using internal::MakeRenderMeshFromTriangleSurfaceMesh;
 using internal::ProximityEngine;
+using internal::RenderMesh;
 using math::RigidTransform;
 using math::RigidTransformd;
 using render::ColorRenderCamera;
@@ -44,6 +59,37 @@ using std::unordered_set;
 using systems::sensors::ImageDepth32F;
 using systems::sensors::ImageLabel16I;
 using systems::sensors::ImageRgba8U;
+
+namespace internal {
+
+template <typename T>
+void DrivenMeshData::SetControlMeshPositions(
+    const std::unordered_map<GeometryId, VectorX<T>>& q_WGs) {
+  for (auto& [id, meshes] : driven_meshes_) {
+    DRAKE_DEMAND(q_WGs.contains(id));
+    // To prevent unnecessary copying, this returns a reference for T=double and
+    // returns a copy otherwise.
+    const VectorX<double>& q_WG =
+        geometry::internal::convert_to_double(q_WGs.at(id));
+    // The meshes are partitions of the overall geometry and each of them knows
+    // how to locate its own coordinates from within the full set of q_WG.
+    for (auto& mesh : meshes) {
+      mesh.SetControlMeshPositions(q_WG);
+    }
+  }
+}
+
+void DrivenMeshData::SetMeshes(
+    GeometryId id, std::vector<DrivenTriangleMesh> driven_meshes,
+    std::vector<RenderMesh> render_meshes) {
+  DRAKE_DEMAND(!driven_meshes.empty());
+  DRAKE_DEMAND(!render_meshes.empty());
+  DRAKE_DEMAND(driven_meshes.size() == render_meshes.size());
+  driven_meshes_.emplace(id, std::move(driven_meshes));
+  render_meshes_.emplace(id, std::move(render_meshes));
+}
+
+}  // namespace internal
 
 //-----------------------------------------------------------------------------
 
@@ -166,6 +212,49 @@ static RigidTransform<T> ChangeScalarType(const RigidTransform<U>& other) {
   }
 }
 
+// Helper for ApplyProximityDefaults(). Adds any proximity properties that are
+// (a) missing in `properties`, and (b) not nullopt in `defaults`.
+//
+// @returns true if any properties were modified.
+bool BackfillDefaults(ProximityProperties* properties,
+                      const DefaultProximityProperties& defaults) {
+  auto backfill = [&](const std::string& group_name, const std::string& name,
+                      const auto& default_value) -> bool {
+    if (properties->HasProperty(group_name, name)) {
+      return false;
+    }
+    if (!default_value.has_value()) {
+      return false;
+    }
+    properties->AddProperty(group_name, name, *default_value);
+    return true;
+  };
+
+  bool result = false;
+  std::optional<HydroelasticType> wrapped_compliance(
+      internal::GetHydroelasticTypeFromString(defaults.compliance_type));
+  result |= backfill(kHydroGroup, kComplianceType, wrapped_compliance);
+
+  result |= backfill(kHydroGroup, kElastic, defaults.hydroelastic_modulus);
+  result |= backfill(kHydroGroup, kRezHint, defaults.resolution_hint);
+  result |= backfill(kHydroGroup, kSlabThickness, defaults.slab_thickness);
+
+  result |= backfill(kMaterialGroup, kHcDissipation,
+                     defaults.hunt_crossley_dissipation);
+  result |= backfill(kMaterialGroup, kRelaxationTime, defaults.relaxation_time);
+  result |= backfill(kMaterialGroup, kPointStiffness, defaults.point_stiffness);
+  if (defaults.static_friction.has_value()) {
+    // DefaultProximityProperties::ValidateOrThrow() enforces invariants on
+    // friction quantities.
+    DRAKE_DEMAND(defaults.dynamic_friction.has_value());
+    const auto wrapped_friction =
+        std::make_optional<multibody::CoulombFriction<double>>(
+            *defaults.static_friction, *defaults.dynamic_friction);
+    result |= backfill(kMaterialGroup, kFriction, wrapped_friction);
+  }
+  return result;
+}
+
 }  // namespace
 
 // It is _vitally_ important that all members are _explicitly_ accounted for
@@ -185,6 +274,7 @@ GeometryState<T>::GeometryState(const GeometryState<U>& source)
       frames_(source.frames_),
       geometries_(source.geometries_),
       frame_index_to_id_map_(source.frame_index_to_id_map_),
+      driven_perception_meshes_(source.driven_perception_meshes_),
       geometry_engine_(
           std::move(source.geometry_engine_->template ToScalarType<T>())),
       render_engines_(source.render_engines_),
@@ -640,6 +730,48 @@ std::vector<GeometryId> GeometryState<T>::GetAllDeformableGeometryIds() const {
   return ids;
 }
 
+namespace {
+
+// Extracts a convex hull from the two shapes that support it (returning
+// nullptr for everything else). Essentially, this merely serves as a mechanism
+// for finding a pointer to a convex hull that is stored with the corresponding
+// InternalGeometry. Therefore, the lifespan of a HullExtractor has no bearing
+// on the lifespan of the pointer returned.
+class HullExtractor final : public ShapeReifier {
+ public:
+  HullExtractor() = default;
+  ~HullExtractor() = default;
+
+  const PolygonSurfaceMesh<double>* GetConvexHull() const { return hull_; }
+
+ private:
+  // Don't throw for the rest, nullptr is fine.
+  void ThrowUnsupportedGeometry(const std::string&) final {}
+
+  using ShapeReifier::ImplementGeometry;
+
+  void ImplementGeometry(const Mesh& mesh, void*) final {
+    hull_ = &mesh.GetConvexHull();
+  }
+
+  void ImplementGeometry(const Convex& convex, void*) final {
+    hull_ = &convex.GetConvexHull();
+  }
+
+  const PolygonSurfaceMesh<double>* hull_{nullptr};
+};
+
+}  // namespace
+
+template <typename T>
+const PolygonSurfaceMesh<double>* GeometryState<T>::GetConvexHull(
+    GeometryId id) const {
+  const InternalGeometry& geometry = GetValueOrThrow(id, geometries_);
+  HullExtractor extractor;
+  geometry.shape().Reify(&extractor);
+  return extractor.GetConvexHull();
+}
+
 template <typename T>
 bool GeometryState<T>::CollisionFiltered(GeometryId id1, GeometryId id2) const {
   std::string base_message =
@@ -758,7 +890,7 @@ FrameId GeometryState<T>::RegisterFrame(SourceId source_id, FrameId parent_id,
                                         const GeometryFrame& frame) {
   FrameId frame_id = frame.id();
 
-  if (frames_.count(frame_id) > 0) {
+  if (frames_.contains(frame_id)) {
     throw std::logic_error(
         "Registering frame with an id that has already been registered: " +
         to_string(frame_id));
@@ -1096,6 +1228,10 @@ void GeometryState<T>::AssignRole(SourceId source_id, GeometryId geometry_id,
 
   geometry.SetRole(std::move(properties));
 
+  if (geometry.is_deformable()) {
+    RegisterDrivenPerceptionMesh(geometry_id);
+  }
+
   const bool added_to_renderer = AddToCompatibleRenderersUnchecked(geometry);
 
   if (!added_to_renderer && render_engines_.size() > 0) {
@@ -1249,7 +1385,7 @@ SignedDistancePair<T> GeometryState<T>::ComputeSignedDistancePairClosestPoints(
 template <typename T>
 void GeometryState<T>::AddRenderer(
     std::string name, std::unique_ptr<render::RenderEngine> renderer) {
-  if (render_engines_.count(name) > 0) {
+  if (render_engines_.contains(name)) {
     throw std::logic_error(fmt::format(
         "AddRenderer(): A renderer with the name '{}' already exists", name));
   }
@@ -1268,11 +1404,16 @@ void GeometryState<T>::AddRenderer(
       DRAKE_DEMAND(properties != nullptr);
       auto accepting_renderers = properties->GetPropertyOrDefault(
           "renderer", "accepting", set<string>{});
-      if (accepting_renderers.empty() || accepting_renderers.count(name) > 0) {
+      if (accepting_renderers.empty() || accepting_renderers.contains(name)) {
         const GeometryId id = id_geo_pair.first;
-        accepted |= render_engine->RegisterVisual(
-            id, geometry.shape(), *properties, RigidTransformd(geometry.X_FG()),
-            geometry.is_dynamic());
+        if (geometry.is_deformable()) {
+          accepted |= render_engine->RegisterDeformableVisual(
+              id, driven_perception_meshes_.render_meshes(id), *properties);
+        } else {
+          accepted |= render_engine->RegisterVisual(
+              id, geometry.shape(), *properties,
+              RigidTransformd(geometry.X_FG()), geometry.is_dynamic());
+        }
       }
     }
   }
@@ -1285,7 +1426,7 @@ void GeometryState<T>::AddRenderer(
 
 template <typename T>
 void GeometryState<T>::RemoveRenderer(const std::string& name) {
-  if (render_engines_.count(name) == 0) {
+  if (!render_engines_.contains(name)) {
     throw std::logic_error(fmt::format(
         "RemoveRenderer(): A renderer with the name '{}' does not exist",
         name));
@@ -1352,6 +1493,40 @@ std::unique_ptr<GeometryState<AutoDiffXd>> GeometryState<T>::ToAutoDiffXd()
     const {
   return std::unique_ptr<GeometryState<AutoDiffXd>>(
       new GeometryState<AutoDiffXd>(*this));
+}
+
+template <typename T>
+void GeometryState<T>::ApplyProximityDefaults(
+    const DefaultProximityProperties& defaults) {
+  for (const auto& geometry_id : GetAllGeometryIds(Role::kProximity)) {
+    ApplyProximityDefaults(defaults, geometry_id);
+  }
+}
+
+template <typename T>
+void GeometryState<T>::ApplyProximityDefaults(
+    const DefaultProximityProperties& defaults,
+    GeometryId geometry_id) {
+  // TODO(#20820) Maybe this can be removed later.
+  // Leave deformables untouched.
+  if (IsDeformableGeometry(geometry_id)) {
+    return;
+  }
+
+  // Get current proximity properties, required by documented precondition.
+  const auto* found_props = GetProximityProperties(geometry_id);
+  DRAKE_DEMAND(found_props != nullptr);
+  ProximityProperties props(*found_props);
+
+  // Update properties with defaults. Return early if nothing changed.
+  bool changed = BackfillDefaults(&props, defaults);
+  if (!changed) {
+    return;
+  }
+
+  // Make the final changes to proximity properties.
+  AssignRole(get_source_id(geometry_id), geometry_id, props,
+             RoleAssign::kReplace);
 }
 
 template <typename T>
@@ -1444,7 +1619,7 @@ void GeometryState<T>::ValidateFrameIds(
 template <typename T>
 void GeometryState<T>::ValidateRegistrationAndSetTopology(
     SourceId source_id, FrameId frame_id, GeometryId geometry_id) {
-  if (geometries_.count(geometry_id) > 0) {
+  if (geometries_.contains(geometry_id)) {
     throw std::logic_error(
         "Registering geometry with an id that has already been registered: " +
         to_string(geometry_id));
@@ -1490,10 +1665,25 @@ void GeometryState<T>::FinalizePoseUpdate(
 template <typename T>
 void GeometryState<T>::FinalizeConfigurationUpdate(
     const internal::KinematicsData<T>& kinematics_data,
+    const internal::DrivenMeshData& driven_meshes,
     internal::ProximityEngine<T>* proximity_engine,
-    std::vector<render::RenderEngine*>) const {
+    std::vector<render::RenderEngine*> render_engines) const {
   proximity_engine->UpdateDeformableVertexPositions(kinematics_data.q_WGs);
-  // TODO(xuchenhan-tri): Update render engine as necessary.
+  for (const auto& [id, meshes] : driven_meshes.driven_meshes()) {
+    // Vertex positions of driven meshes.
+    std::vector<VectorX<double>> q_WDs(meshes.size());
+    // Vertex normals of driven meshes.
+    std::vector<VectorX<double>> nhats_W(meshes.size());
+    for (int i = 0; i < ssize(meshes); ++i) {
+      // TODO(xuchenhan-tri): Consider eliminating the copy here if performance
+      // is an issue.
+      q_WDs[i] = meshes[i].GetDrivenVertexPositions();
+      nhats_W[i] = meshes[i].GetDrivenVertexNormals();
+    }
+    for (auto* render_engine : render_engines) {
+      render_engine->UpdateDeformableConfigurations(id, q_WDs, nhats_W);
+    }
+  }
 }
 
 template <typename T>
@@ -1710,22 +1900,25 @@ bool GeometryState<T>::RemoveFromRendererUnchecked(
 template <typename T>
 bool GeometryState<T>::AddToCompatibleRenderersUnchecked(
     const internal::InternalGeometry& geometry) {
-  const PerceptionProperties& properties = *geometry.perception_properties();
-
-  const RigidTransformd& X_WG =
-      convert_to_double(kinematics_data_.X_WGs.at(geometry.id()));
-
+  bool added_to_renderer = false;
   auto accepting_renderers =
-      properties.GetPropertyOrDefault("renderer", "accepting", set<string>{});
-
-  bool added_to_renderer{false};
+      geometry.perception_properties()->GetPropertyOrDefault(
+          "renderer", "accepting", set<string>{});
+  std::vector<render::RenderEngine*> candidate_renderers;
   for (auto& [name, engine] : render_engines_) {
-    if (accepting_renderers.empty() || accepting_renderers.count(name) > 0) {
-      added_to_renderer =
-          engine->RegisterVisual(geometry.id(), geometry.shape(), properties,
-                                 X_WG, geometry.is_dynamic()) ||
-          added_to_renderer;
+    // If no "accepting_renderer" has been specified, every renderer will be
+    // given the chance to register the geometry.
+    if (accepting_renderers.empty() || accepting_renderers.contains(name)) {
+      candidate_renderers.emplace_back(engine.get_mutable());
     }
+  }
+  if (candidate_renderers.empty()) return false;
+  if (geometry.is_deformable()) {
+    added_to_renderer = AddDeformableToCompatibleRenderersUnchecked(
+        geometry, &candidate_renderers);
+  } else {
+    added_to_renderer =
+        AddRigidToCompatibleRenderersUnchecked(geometry, &candidate_renderers);
   }
   if (added_to_renderer) {
     // Increment version number only if some renderer picks up the role
@@ -1733,6 +1926,74 @@ bool GeometryState<T>::AddToCompatibleRenderersUnchecked(
     geometry_version_.modify_perception();
   }
   return added_to_renderer;
+}
+
+template <typename T>
+bool GeometryState<T>::AddRigidToCompatibleRenderersUnchecked(
+    const internal::InternalGeometry& geometry,
+    std::vector<render::RenderEngine*>* candidate_renderers) {
+  const PerceptionProperties& properties = *geometry.perception_properties();
+
+  const RigidTransformd& X_WG =
+      convert_to_double(kinematics_data_.X_WGs.at(geometry.id()));
+
+  bool added_to_renderer{false};
+  for (auto& engine : *candidate_renderers) {
+    added_to_renderer =
+        engine->RegisterVisual(geometry.id(), geometry.shape(), properties,
+                               X_WG, geometry.is_dynamic()) ||
+        added_to_renderer;
+  }
+  return added_to_renderer;
+}
+
+template <typename T>
+bool GeometryState<T>::AddDeformableToCompatibleRenderersUnchecked(
+    const internal::InternalGeometry& geometry,
+    std::vector<render::RenderEngine*>* candidate_renderers) {
+  const GeometryId id = geometry.id();
+  const PerceptionProperties& properties = *geometry.perception_properties();
+  bool added_to_renderer{false};
+  for (auto& engine : *candidate_renderers) {
+    added_to_renderer =
+        engine->RegisterDeformableVisual(
+            id, driven_perception_meshes_.render_meshes(id), properties) ||
+        added_to_renderer;
+  }
+  return added_to_renderer;
+}
+
+template <typename T>
+void GeometryState<T>::RegisterDrivenPerceptionMesh(GeometryId geometry_id) {
+  InternalGeometry& geometry = geometries_[geometry_id];
+  DRAKE_DEMAND(geometry.is_deformable());
+  DRAKE_DEMAND(geometry.has_perception_role());
+  const PerceptionProperties& properties = *geometry.perception_properties();
+
+  const VolumeMesh<double>* control_mesh_ptr = geometry.reference_mesh();
+  DRAKE_DEMAND(control_mesh_ptr != nullptr);
+  const VolumeMesh<double>& control_mesh = *control_mesh_ptr;
+
+  const string render_meshes_file =
+      properties.GetPropertyOrDefault("deformable", "embedded_mesh", string{});
+  std::vector<RenderMesh> render_meshes;
+  std::vector<DrivenTriangleMesh> driven_meshes;
+  if (render_meshes_file.empty()) {
+    // If no render mesh is specified, use the surface triangle mesh of the
+    // control volume mesh as the render mesh.
+    driven_meshes.emplace_back(internal::MakeDrivenSurfaceMesh(control_mesh));
+    render_meshes.emplace_back(MakeRenderMeshFromTriangleSurfaceMesh(
+        driven_meshes.back().triangle_surface_mesh(), properties));
+  } else {
+    render_meshes =
+        internal::LoadRenderMeshesFromObj(render_meshes_file, properties, {});
+    for (const internal::RenderMesh& render_mesh : render_meshes) {
+      driven_meshes.emplace_back(MakeTriangleSurfaceMesh(render_mesh),
+                                 control_mesh);
+    }
+  }
+  driven_perception_meshes_.SetMeshes(geometry_id, std::move(driven_meshes),
+                                      std::move(render_meshes));
 }
 
 template <typename T>
@@ -1782,8 +2043,12 @@ bool GeometryState<T>::RemovePerceptionRole(GeometryId geometry_id) {
   if (!geometry->has_perception_role()) return false;
 
   // Geometry has a perception role; do the work to remove it from whichever
-  // render engines it happens to present in.
+  // render engines it happens to be present in and also remove its driven
+  // perception meshes.
   RemoveFromAllRenderersUnchecked(geometry_id);
+  if (IsDeformableGeometry(geometry_id)) {
+    driven_perception_meshes_.Remove(geometry_id);
+  }
   geometry->RemovePerceptionRole();
   return true;
 }
@@ -1852,3 +2117,6 @@ template GeometryState<Expression>::GeometryState(const GeometryState<AutoDiffXd
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
     class ::drake::geometry::GeometryState)
+DRAKE_DEFINE_FUNCTION_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
+    (&drake::geometry::internal::DrivenMeshData::
+         template SetControlMeshPositions<T>))

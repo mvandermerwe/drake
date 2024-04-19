@@ -108,12 +108,17 @@ DeformableContactSurface<T>::DeformableContactSurface(
                  static_cast<int>(barycentric_coordinates_B_->size()));
     DRAKE_DEMAND(num_contact_points ==
                  static_cast<int>(contact_vertex_indexes_B_->size()));
+    DRAKE_DEMAND(id_A < id_B);
   }
   nhats_W_.reserve(num_contact_points);
   contact_points_W_.reserve(num_contact_points);
+  R_WCs_.reserve(num_contact_points);
+  const int kZAxis = 2;
   for (int i = 0; i < num_contact_points; ++i) {
     nhats_W_.emplace_back(contact_mesh_W_.face_normal(i));
     contact_points_W_.emplace_back(contact_mesh_W_.element_centroid(i));
+    R_WCs_.emplace_back(
+        math::RotationMatrix<T>::MakeFromOneUnitVector(-nhats_W_[i], kZAxis));
   }
 }
 

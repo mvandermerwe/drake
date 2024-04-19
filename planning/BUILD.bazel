@@ -1,10 +1,10 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
 load(
     "//tools/skylark:drake_cc.bzl",
     "drake_cc_googletest",
     "drake_cc_library",
     "drake_cc_package_library",
 )
-load("//tools/lint:lint.bzl", "add_lint_tests")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -268,9 +268,10 @@ drake_cc_googletest(
 drake_cc_googletest(
     name = "linear_distance_and_interpolation_provider_test",
     data = [
-        "//manipulation/models/iiwa_description:models",
         "//planning/test_utilities:collision_ground_plane.sdf",
         "//planning/test_utilities:flying_robot_base.sdf",
+        "@drake_models//:iiwa_description",
+        "@drake_models//:ycb",
     ],
     deps = [
         ":linear_distance_and_interpolation_provider",
@@ -300,7 +301,7 @@ drake_cc_googletest(
 drake_cc_googletest(
     name = "robot_diagram_test",
     data = [
-        "//manipulation/models/iiwa_description:models",
+        "@drake_models//:iiwa_description",
     ],
     deps = [
         ":robot_diagram",
@@ -314,7 +315,7 @@ drake_cc_googletest(
     name = "scene_graph_collision_checker_test",
     timeout = "moderate",
     data = [
-        "//manipulation/models/ycb:models",
+        "@drake_models//:ycb",
     ],
     # Running with multiple threads is an essential part of our test coverage.
     num_threads = 2,

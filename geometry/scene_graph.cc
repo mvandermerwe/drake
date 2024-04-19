@@ -149,7 +149,7 @@ SourceId SceneGraph<T>::RegisterSource(const std::string& name) {
 
 template <typename T>
 bool SceneGraph<T>::SourceIsRegistered(SourceId id) const {
-  return input_source_ids_.count(id) > 0;
+  return input_source_ids_.contains(id);
 }
 
 template <typename T>
@@ -444,7 +444,7 @@ void SceneGraph<T>::SetDefaultParameters(const Context<T>& context,
 template <typename T>
 void SceneGraph<T>::MakeSourcePorts(SourceId source_id) {
   // This will fail only if the source generator starts recycling source ids.
-  DRAKE_ASSERT(input_source_ids_.count(source_id) == 0);
+  DRAKE_ASSERT(!input_source_ids_.contains(source_id));
   // Create and store the input ports for this source id.
   SourcePorts& source_ports = input_source_ids_[source_id];
   source_ports.pose_port =
@@ -540,6 +540,8 @@ void SceneGraph<T>::CalcConfigurationUpdate(const Context<T>& context,
   // needed and is correct.
   internal::KinematicsData<T>& kinematics_data =
       state.mutable_kinematics_data();
+  internal::DrivenMeshData& driven_perception_meshes =
+      state.mutable_driven_perception_meshes();
   // Process all sources *except*:
   //   - the internal source and
   //   - sources with no deformable geometries.
@@ -566,7 +568,9 @@ void SceneGraph<T>::CalcConfigurationUpdate(const Context<T>& context,
     }
   }
 
+  driven_perception_meshes.SetControlMeshPositions(kinematics_data.q_WGs);
   state.FinalizeConfigurationUpdate(kinematics_data,
+                                    driven_perception_meshes,
                                     &state.mutable_proximity_engine(),
                                     state.GetMutableRenderEngines());
 }

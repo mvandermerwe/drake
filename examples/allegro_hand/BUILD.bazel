@@ -1,10 +1,10 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
 load(
     "//tools/skylark:drake_cc.bzl",
     "drake_cc_binary",
     "drake_cc_googletest",
     "drake_cc_library",
 )
-load("//tools/lint:lint.bzl", "add_lint_tests")
 
 package(
     default_visibility = [":__subpackages__"],
@@ -36,7 +36,7 @@ drake_cc_binary(
     name = "run_allegro_constant_load_demo",
     srcs = ["run_allegro_constant_load_demo.cc"],
     data = [
-        "//manipulation/models/allegro_hand_description:models",
+        "@drake_models//:allegro_hand_description",
     ],
     deps = [
         "//common:add_text_logging_gflags",
@@ -59,6 +59,18 @@ drake_cc_googletest(
         ":allegro_lcm",
         "//common/test_utilities:eigen_matrix_compare",
         "//systems/framework",
+    ],
+)
+
+drake_cc_googletest(
+    name = "parse_test",
+    data = [
+        "@drake_models//:allegro_hand_description",
+    ],
+    deps = [
+        "//common:find_resource",
+        "//multibody/parsing",
+        "//multibody/plant",
     ],
 )
 

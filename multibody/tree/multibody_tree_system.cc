@@ -76,13 +76,6 @@ MultibodyTreeSystem<T>::MultibodyTreeSystem(
 }
 
 template <typename T>
-void MultibodyTreeSystem<T>::SetDefaultState(const Context<T>& context,
-                                             State<T>* state) const {
-  LeafSystem<T>::SetDefaultState(context, state);
-  tree_->SetDefaultState(context, state);
-}
-
-template <typename T>
 void MultibodyTreeSystem<T>::SetDefaultParameters(
     const Context<T>& context, Parameters<T>* parameters) const {
   LeafSystem<T>::SetDefaultParameters(context, parameters);
@@ -102,8 +95,8 @@ void MultibodyTreeSystem<T>::SetDefaultParameters(
         .SetDefaultParameters(parameters);
   }
   // JointActuators.
-  for (JointActuatorIndex joint_actuator_index(0);
-       joint_actuator_index < tree_->num_actuators(); ++joint_actuator_index) {
+  for (JointActuatorIndex joint_actuator_index :
+       tree_->GetJointActuatorIndices()) {
     internal_tree()
         .get_joint_actuator(joint_actuator_index)
         .SetDefaultParameters(parameters);
@@ -133,6 +126,13 @@ void MultibodyTreeSystem<T>::SetDefaultParameters(
 }
 
 template <typename T>
+void MultibodyTreeSystem<T>::SetDefaultState(const Context<T>& context,
+                                             State<T>* state) const {
+  LeafSystem<T>::SetDefaultState(context, state);
+  tree_->SetDefaultState(context, state);
+}
+
+template <typename T>
 MultibodyTreeSystem<T>::~MultibodyTreeSystem() = default;
 
 template <typename T>
@@ -156,8 +156,8 @@ void MultibodyTreeSystem<T>::DeclareMultibodyElementParameters() {
     mutable_tree().get_mutable_joint(joint_index).DeclareParameters(this);
   }
   // JointActuators.
-  for (JointActuatorIndex joint_actuator_index(0);
-       joint_actuator_index < tree_->num_actuators(); ++joint_actuator_index) {
+  for (JointActuatorIndex joint_actuator_index :
+       tree_->GetJointActuatorIndices()) {
     mutable_tree()
         .get_mutable_joint_actuator(joint_actuator_index)
         .DeclareParameters(this);
@@ -219,7 +219,8 @@ void MultibodyTreeSystem<T>::Finalize() {
   // Allocate cache entry to store spatial inertia M_B_W(q) for each body.
   cache_indexes_.spatial_inertia_in_world = this->DeclareCacheEntry(
       std::string("spatial inertia in world (M_B_W)"),
-      std::vector<SpatialInertia<T>>(internal_tree().num_bodies()),
+      std::vector<SpatialInertia<T>>(internal_tree().num_bodies(),
+                                     SpatialInertia<T>::NaN()),
       &MultibodyTreeSystem<T>::CalcSpatialInertiasInWorld,
       {position_kinematics_cache_entry().ticket()}).cache_index();
 
@@ -229,10 +230,18 @@ void MultibodyTreeSystem<T>::Finalize() {
       &MultibodyTreeSystem<T>::CalcReflectedInertia,
       {this->all_parameters_ticket()}).cache_index();
 
+  // Allocate cache entry for joint damping.
+  cache_indexes_.joint_damping = this->DeclareCacheEntry(
+      std::string("joint damping"),
+      VectorX<T>(internal_tree().num_velocities()),
+      &MultibodyTreeSystem<T>::CalcJointDamping,
+      {this->all_parameters_ticket()}).cache_index();
+
   // Allocate cache entry for composite-body inertias Mc_B_W(q) for each body.
   cache_indexes_.composite_body_inertia_in_world = this->DeclareCacheEntry(
       std::string("composite body inertia in world (Mc_B_W)"),
-      std::vector<SpatialInertia<T>>(internal_tree().num_bodies()),
+      std::vector<SpatialInertia<T>>(internal_tree().num_bodies(),
+                                     SpatialInertia<T>::NaN()),
       &MultibodyTreeSystem<T>::CalcCompositeBodyInertiasInWorld,
       {position_kinematics_cache_entry().ticket()}).cache_index();
 

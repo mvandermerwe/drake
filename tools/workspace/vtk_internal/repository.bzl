@@ -1,10 +1,10 @@
 load(
-    "//tools/workspace:github.bzl",
-    "setup_github_repository",
-)
-load(
     "//tools/workspace:execute.bzl",
     "execute_or_fail",
+)
+load(
+    "//tools/workspace:github.bzl",
+    "setup_github_repository",
 )
 
 def parse_module(repo_ctx, subdir):
@@ -172,16 +172,17 @@ def vtk_internal_repository(
         # TODO(jwnimmer-tri) Once there's a tagged release with support for
         # VTK_ABI_NAMESPACE, we should switch to an official version number
         # here. That probably means waiting for the VTK 10 release.
-        commit = "04fb139f1dccaf0c538553e1b494bd21f71fd663",
-        sha256 = "eb8696d2622a79603055279ead20674772ce351565794cd7ce9c5f6bc1b44426",  # noqa
+        commit = "88b2e71c34dc1f321166d36d900f083f9806cd1d",
+        sha256 = "9bbbd4d71e62eb08a5500d2db355d185707ef0725899625656b6e770cd760da5",  # noqa
         build_file = ":package.BUILD.bazel",
         patches = [
             ":patches/camera_copy.patch",
+            ":patches/common_core_nobacktrace.patch",
             ":patches/common_core_version.patch",
             ":patches/fix_illumination_bugs.patch",
             ":patches/gltf_parser.patch",
+            ":patches/gltf_quiet_image_errors.patch",
             ":patches/io_image_formats.patch",
-            ":patches/io_legacy_data_reader_uninit.patch",
             ":patches/rendering_opengl2_nobacktrace.patch",
             ":patches/vtkdoubleconversion_hidden.patch",
             ":patches/vtkfast_float_hidden.patch",

@@ -186,23 +186,40 @@ std::unordered_map<symbolic::Variable, Bound> AggregateBoundingBoxConstraints(
   return bounds;
 }
 
+namespace {
+template <typename C>
+void AggregateBoundingBoxConstraintsImpl(const MathematicalProgram& prog,
+                                         C* lower, C* upper) {
+  for (const auto& constraint : prog.bounding_box_constraints()) {
+    for (int i = 0; i < constraint.variables().rows(); ++i) {
+      const int var_index =
+          prog.FindDecisionVariableIndex(constraint.variables()(i));
+      if (constraint.evaluator()->lower_bound()(i) > (*lower)[var_index]) {
+        (*lower)[var_index] = constraint.evaluator()->lower_bound()(i);
+      }
+      if (constraint.evaluator()->upper_bound()(i) < (*upper)[var_index]) {
+        (*upper)[var_index] = constraint.evaluator()->upper_bound()(i);
+      }
+    }
+  }
+}
+
+}  // namespace
+
 void AggregateBoundingBoxConstraints(const MathematicalProgram& prog,
                                      Eigen::VectorXd* lower,
                                      Eigen::VectorXd* upper) {
   *lower = Eigen::VectorXd::Constant(prog.num_vars(), -kInf);
   *upper = Eigen::VectorXd::Constant(prog.num_vars(), kInf);
-  for (const auto& constraint : prog.bounding_box_constraints()) {
-    for (int i = 0; i < constraint.variables().rows(); ++i) {
-      const int var_index =
-          prog.FindDecisionVariableIndex(constraint.variables()(i));
-      if (constraint.evaluator()->lower_bound()(i) > (*lower)(var_index)) {
-        (*lower)(var_index) = constraint.evaluator()->lower_bound()(i);
-      }
-      if (constraint.evaluator()->upper_bound()(i) < (*upper)(var_index)) {
-        (*upper)(var_index) = constraint.evaluator()->upper_bound()(i);
-      }
-    }
-  }
+  AggregateBoundingBoxConstraintsImpl(prog, lower, upper);
+}
+
+void AggregateBoundingBoxConstraints(const MathematicalProgram& prog,
+                                     std::vector<double>* lower,
+                                     std::vector<double>* upper) {
+  *lower = std::vector<double>(prog.num_vars(), -kInf);
+  *upper = std::vector<double>(prog.num_vars(), kInf);
+  AggregateBoundingBoxConstraintsImpl(prog, lower, upper);
 }
 
 void AggregateDuplicateVariables(const Eigen::SparseMatrix<double>& A,
@@ -216,7 +233,7 @@ void AggregateDuplicateVariables(const Eigen::SparseMatrix<double>& A,
   std::unordered_map<symbolic::Variable::Id, int> vars_to_vars_new;
   int unique_var_count = 0;
   for (int i = 0; i < vars.rows(); ++i) {
-    const bool seen_already = vars_to_vars_new.count(vars(i).get_id());
+    const bool seen_already = vars_to_vars_new.contains(vars(i).get_id());
     if (!seen_already) {
       (*vars_new)(unique_var_count) = vars(i);
       vars_to_vars_new.emplace(vars(i).get_id(), unique_var_count);
@@ -481,6 +498,46 @@ void ParseQuadraticCosts(const MathematicalProgram& prog,
   }
 }
 
+void ParseL2NormCosts(const MathematicalProgram& prog,
+                      int* num_solver_variables,
+                      std::vector<Eigen::Triplet<double>>* A_triplets,
+                      std::vector<double>* b, int* A_row_count,
+                      std::vector<int>* second_order_cone_length,
+                      std::vector<int>* lorentz_cone_y_start_indices,
+                      std::vector<double>* cost_coeffs,
+                      std::vector<int>* t_slack_indices) {
+  int t_slack_count = 0;
+  for (const auto& cost : prog.l2norm_costs()) {
+    const VectorXDecisionVariable& x = cost.variables();
+    t_slack_indices->push_back(t_slack_count + *num_solver_variables);
+    const Eigen::SparseMatrix<double>& C = cost.evaluator()->get_sparse_A();
+    const auto& d = cost.evaluator()->b();
+    // Add the constraint
+    // [0   -1] * [x] + s = [0]
+    // [-C   0]   [t]       [d]
+    A_triplets->emplace_back(*A_row_count, t_slack_indices->back(), -1);
+    b->push_back(0);
+    for (int k = 0; k < C.outerSize(); ++k) {
+      const int x_index = prog.FindDecisionVariableIndex(x(k));
+      for (Eigen::SparseMatrix<double>::InnerIterator it(C, k); it; ++it) {
+        A_triplets->emplace_back(*A_row_count + 1 + it.row(), x_index,
+                                 -it.value());
+      }
+    }
+    for (int i = 0; i < d.rows(); ++i) {
+      b->push_back(d(i));
+    }
+    // Add the cost to minimize t
+    cost_coeffs->push_back(1.0);
+
+    second_order_cone_length->push_back(1 + cost.evaluator()->b().rows());
+    lorentz_cone_y_start_indices->push_back(*A_row_count);
+
+    *num_solver_variables += 1;
+    *A_row_count += 1 + cost.evaluator()->b().rows();
+  }
+}
+
 void ParseSecondOrderConeConstraints(
     const MathematicalProgram& prog,
     std::vector<Eigen::Triplet<double>>* A_triplets, std::vector<double>* b,
@@ -499,7 +556,7 @@ void ParseSecondOrderConeConstraints(
     // x_indices[i] is the index of x(i)
     const VectorXDecisionVariable& x = lorentz_cone_constraint.variables();
     const std::vector<int> x_indices = prog.FindDecisionVariableIndices(x);
-    const Eigen::SparseMatrix<double> Ai =
+    const Eigen::SparseMatrix<double>& Ai =
         lorentz_cone_constraint.evaluator()->A();
     const std::vector<Eigen::Triplet<double>> Ai_triplets =
         math::SparseMatrixToTriplets(Ai);

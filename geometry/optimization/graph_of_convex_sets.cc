@@ -44,6 +44,7 @@ using solvers::LinearConstraint;
 using solvers::LinearCost;
 using solvers::LinearEqualityConstraint;
 using solvers::LInfNormCost;
+using solvers::LorentzConeConstraint;
 using solvers::MathematicalProgram;
 using solvers::MathematicalProgramResult;
 using solvers::MatrixXDecisionVariable;
@@ -183,10 +184,12 @@ Edge::Edge(const EdgeId& id, Vertex* u, Vertex* v, std::string name)
       u_{u},
       v_{v},
       allowed_vars_{u_->x()},
-      phi_{"phi", symbolic::Variable::Type::BINARY},
+      phi_{name + "phi", symbolic::Variable::Type::BINARY},
       name_(std::move(name)),
-      y_{symbolic::MakeVectorContinuousVariable(u_->ambient_dimension(), "y")},
-      z_{symbolic::MakeVectorContinuousVariable(v_->ambient_dimension(), "z")},
+      y_{symbolic::MakeVectorContinuousVariable(u_->ambient_dimension(),
+                                                name_ + "y")},
+      z_{symbolic::MakeVectorContinuousVariable(v_->ambient_dimension(),
+                                                name_ + "z")},
       x_to_yz_{static_cast<size_t>(y_.size() + z_.size())} {
   DRAKE_DEMAND(u_ != nullptr);
   DRAKE_DEMAND(v_ != nullptr);
@@ -210,7 +213,8 @@ std::pair<Variable, Binding<Cost>> Edge::AddCost(const Binding<Cost>& binding) {
   DRAKE_THROW_UNLESS(Variables(binding.variables()).IsSubsetOf(allowed_vars_));
   const int n = ell_.size();
   ell_.conservativeResize(n + 1);
-  ell_[n] = Variable(fmt::format("ell{}", n), Variable::Type::CONTINUOUS);
+  ell_[n] =
+      Variable(fmt::format("{}ell{}", name_, n), Variable::Type::CONTINUOUS);
   costs_.emplace_back(binding);
   return std::pair<Variable, Binding<Cost>>(ell_[n], costs_.back());
 }
@@ -277,7 +281,7 @@ Edge* GraphOfConvexSets::AddEdge(Vertex* u, Vertex* v, std::string name) {
 void GraphOfConvexSets::RemoveVertex(Vertex* vertex) {
   DRAKE_THROW_UNLESS(vertex != nullptr);
   VertexId vertex_id = vertex->id();
-  DRAKE_THROW_UNLESS(vertices_.count(vertex_id) > 0);
+  DRAKE_THROW_UNLESS(vertices_.contains(vertex_id));
   for (auto it = edges_.begin(); it != edges_.end();) {
     if (it->second->u().id() == vertex_id) {
       it->second->v().RemoveIncomingEdge(it->second.get());
@@ -294,7 +298,7 @@ void GraphOfConvexSets::RemoveVertex(Vertex* vertex) {
 
 void GraphOfConvexSets::RemoveEdge(Edge* edge) {
   DRAKE_THROW_UNLESS(edge != nullptr);
-  DRAKE_THROW_UNLESS(edges_.count(edge->id()) > 0);
+  DRAKE_THROW_UNLESS(edges_.contains(edge->id()));
   edge->u().RemoveOutgoingEdge(edge);
   edge->v().RemoveIncomingEdge(edge);
   edges_.erase(edge->id());
@@ -368,8 +372,8 @@ std::string GraphOfConvexSets::GetGraphvizString(
       graphviz << "\n";
       if (e->ell_.size() > 0) {
         // SolveConvexRestriction does not yet return the rewritten costs.
-        if (result->get_decision_variable_index()->count(e->ell_[0].get_id()) !=
-            0) {
+        if (result->get_decision_variable_index()->contains(
+                e->ell_[0].get_id())) {
           graphviz << "cost = " << e->GetSolutionCost(*result);
         }
       } else {
@@ -378,8 +382,8 @@ std::string GraphOfConvexSets::GetGraphvizString(
       if (show_slacks) {
         graphviz << ",\n";
         graphviz << "ϕ = " << result->GetSolution(e->phi()) << ",\n";
-        if (result->get_decision_variable_index()->count(e->y_[0].get_id()) !=
-            0) {
+        if (result->get_decision_variable_index()->contains(
+                e->y_[0].get_id())) {
           graphviz << "ϕ xᵤ = [" << e->GetSolutionPhiXu(*result).transpose()
                    << "],\n";
           graphviz << "ϕ xᵥ = [" << e->GetSolutionPhiXv(*result).transpose()
@@ -495,7 +499,7 @@ std::set<EdgeId> GraphOfConvexSets::PreprocessShortestPath(
   }
 
   for (const auto& [edge_id, e] : edges_) {
-    if (unusable_edges.count(edge_id)) {
+    if (unusable_edges.contains(edge_id)) {
       continue;
     }
 
@@ -642,10 +646,12 @@ void GraphOfConvexSets::AddPerspectiveCost(
                               VectorXd::Zero(A_linear.rows()), cost_vars);
   } else if (L2NormCost* l2c = dynamic_cast<L2NormCost*>(cost)) {
     // |Ax + b|₂ becomes ℓ ≥ |Ax+bϕ|₂.
-    MatrixXd A_cone = MatrixXd::Zero(l2c->A().rows() + 1, vars.size());
-    A_cone(0, 1) = 1.0;                                 // z₀ = ℓ.
-    A_cone.block(1, 0, l2c->A().rows(), 1) = l2c->b();  // bϕ.
-    A_cone.block(1, 2, l2c->A().rows(), l2c->A().cols()) = l2c->A();  // Ax.
+    MatrixXd A_cone =
+        MatrixXd::Zero(l2c->get_sparse_A().rows() + 1, vars.size());
+    A_cone(0, 1) = 1.0;  // z₀ = ℓ.
+    A_cone.block(1, 0, l2c->get_sparse_A().rows(), 1) = l2c->b();  // bϕ.
+    A_cone.block(1, 2, l2c->get_sparse_A().rows(), l2c->get_sparse_A().cols()) =
+        l2c->get_sparse_A();  // Ax.
     prog->AddLorentzConeConstraint(A_cone, VectorXd::Zero(A_cone.rows()), vars);
   } else if (LInfNormCost* linfc = dynamic_cast<LInfNormCost*>(cost)) {
     // |Ax + b|∞ becomes ℓ ≥ |Aᵢx+bᵢϕ| ∀ i.
@@ -750,6 +756,28 @@ void GraphOfConvexSets::AddPerspectiveConstraint(
         }
       }
     }
+  } else if (LorentzConeConstraint* lcc =
+                 dynamic_cast<LorentzConeConstraint*>(constraint)) {
+    // z ∈ K for z = Ax + b becomes
+    // z ∈ K for z = Ax + bϕ = [b A] [ϕ; x]
+    // (Notice that this is the same as for a RotatedLorentzConeConstraint,
+    // as it does not depend on whether the cone is rotated or not).
+    MatrixXd A_cone = MatrixXd::Zero(lcc->A().rows(), vars.size());
+    A_cone.block(0, 0, lcc->A().rows(), 1) = lcc->b();
+    A_cone.block(0, 1, lcc->A().rows(), lcc->A().cols()) = lcc->A_dense();
+    prog->AddLorentzConeConstraint(A_cone, VectorXd::Zero(lcc->A().rows()),
+                                   vars);
+  } else if (RotatedLorentzConeConstraint* rc =
+                 dynamic_cast<RotatedLorentzConeConstraint*>(constraint)) {
+    // z ∈ K for z = Ax + b becomes
+    // z ∈ K for z = Ax + bϕ = [b A] [ϕ; x]
+    // (Notice that this is the same as for a LorentzConeConstraint,
+    // as it does not depend on whether the cone is rotated or not).
+    MatrixXd A_cone = MatrixXd::Zero(rc->A().rows(), vars.size());
+    A_cone.block(0, 0, rc->A().rows(), 1) = rc->b();
+    A_cone.block(0, 1, rc->A().rows(), rc->A().cols()) = rc->A_dense();
+    prog->AddRotatedLorentzConeConstraint(A_cone,
+                                          VectorXd::Zero(rc->A().rows()), vars);
   } else {
     throw std::runtime_error(
         fmt::format("ShortestPathProblem::Edge does not support this "
@@ -809,7 +837,7 @@ MathematicalProgramResult GraphOfConvexSets::SolveShortestPath(
   for (const auto& [edge_id, e] : edges_) {
     // If an edge is turned off (ϕ = 0) or excluded by preprocessing, don't
     // include it in the optimization.
-    if (!e->phi_value_.value_or(true) || unusable_edges.count(edge_id)) {
+    if (!e->phi_value_.value_or(true) || unusable_edges.contains(edge_id)) {
       // Track excluded edges (ϕ = 0 and preprocessed) so that their variables
       // can be set in the optimization result.
       excluded_edges.emplace_back(e.get());
@@ -830,7 +858,7 @@ MathematicalProgramResult GraphOfConvexSets::SolveShortestPath(
 
     Variable phi;
     if (*options.convex_relaxation) {
-      phi = prog.NewContinuousVariables<1>("phi")[0];
+      phi = prog.NewContinuousVariables<1>(e->name() + "phi")[0];
       prog.AddBoundingBoxConstraint(0, 1, phi);
       relaxed_phi.emplace(edge_id, phi);
     } else {
@@ -840,7 +868,8 @@ MathematicalProgramResult GraphOfConvexSets::SolveShortestPath(
     if (e->phi_value_.has_value()) {
       DRAKE_DEMAND(*e->phi_value_);
       double phi_value = *e->phi_value_ ? 1.0 : 0.0;
-      prog.AddBoundingBoxConstraint(phi_value, phi_value, phi);
+      prog.AddLinearEqualityConstraint(Vector1d(1.0), phi_value,
+                                       Vector1<Variable>(phi));
     }
     prog.AddDecisionVariables(e->y_);
     prog.AddDecisionVariables(e->z_);
@@ -1085,7 +1114,7 @@ MathematicalProgramResult GraphOfConvexSets::SolveShortestPath(
     std::vector<std::vector<const Edge*>> paths;
     std::map<EdgeId, double> flows;
     for (const auto& [edge_id, e] : edges_) {
-      if (!e->phi_value_.value_or(true) || unusable_edges.count(edge_id)) {
+      if (!e->phi_value_.value_or(true) || unusable_edges.contains(edge_id)) {
         flows.emplace(edge_id, 0);
       } else {
         flows.emplace(edge_id, result.GetSolution(relaxed_phi[edge_id]));
@@ -1263,12 +1292,12 @@ std::vector<const Edge*> GraphOfConvexSets::GetSolutionPath(
     throw std::runtime_error(
         "Cannot extract a solution path when result.is_success() is false.");
   }
-  if (vertices_.count(source.id()) == 0) {
+  if (!vertices_.contains(source.id())) {
     throw std::invalid_argument(fmt::format(
         "Source vertex {} is not a vertex in this GraphOfConvexSets.",
         source.name()));
   }
-  if (vertices_.count(target.id()) == 0) {
+  if (!vertices_.contains(target.id())) {
     throw std::invalid_argument(fmt::format(
         "Target vertex {} is not a vertex in this GraphOfConvexSets.",
         target.name()));
@@ -1289,7 +1318,7 @@ std::vector<const Edge*> GraphOfConvexSets::GetSolutionPath(
       // If the edge has not been visited and has a flow greater than the
       // current maximum, then this is our new maximum.
       if (flow >= 1 - tolerance && flow > maximum_flow &&
-          visited_vertices.count(&e->v()) == 0) {
+          !visited_vertices.contains(&e->v())) {
         maximum_flow = flow;
         max_flow_vertex = &e->v();
         max_flow_edge = e;
@@ -1340,14 +1369,14 @@ void RewriteForConvexSolver(MathematicalProgram* prog) {
   std::unordered_set<Binding<Cost>> to_remove;
 
   for (const auto& binding : prog->l2norm_costs()) {
-    const int m = binding.evaluator()->A().rows();
-    const int n = binding.evaluator()->A().cols();
+    const int m = binding.evaluator()->get_sparse_A().rows();
+    const int n = binding.evaluator()->get_sparse_A().cols();
     auto slack = prog->NewContinuousVariables<1>("slack");
     prog->AddLinearCost(Vector1d::Ones(), slack);
     // |Ax+b|² ≤ slack, written as a Lorentz cone with z = [slack; Ax+b].
     MatrixXd A = MatrixXd::Zero(m + 1, n + 1);
     A(0, 0) = 1;
-    A.bottomRightCorner(m, n) = binding.evaluator()->A();
+    A.bottomRightCorner(m, n) = binding.evaluator()->get_sparse_A();
     VectorXd b(m + 1);
     b << 0, binding.evaluator()->b();
     prog->AddLorentzConeConstraint(A, b, {slack, binding.variables()});
@@ -1422,7 +1451,7 @@ MathematicalProgramResult GraphOfConvexSets::SolveConvexRestriction(
 
   std::set<const Vertex*, VertexIdComparator> vertices;
   for (const auto* e : active_edges) {
-    if (edges_.count(e->id()) == 0) {
+    if (!edges_.contains(e->id())) {
       throw std::runtime_error(
           fmt::format("Edge {} is not in the graph.", e->name()));
     }
@@ -1470,7 +1499,7 @@ MathematicalProgramResult GraphOfConvexSets::SolveConvexRestriction(
   std::vector<const Vertex*> excluded_vertices;
   for (const auto& pair : vertices_) {
     const Vertex* v = pair.second.get();
-    if (vertices.count(v) == 0) {
+    if (!vertices.contains(v)) {
       num_excluded_vars += v->x().size();
       excluded_vertices.emplace_back(v);
     }

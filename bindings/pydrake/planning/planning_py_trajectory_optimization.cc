@@ -393,6 +393,10 @@ void DefinePlanningTrajectoryOptimization(py::module m) {
         .def("AddVelocityBounds",
             &Class::EdgesBetweenSubgraphs::AddVelocityBounds, py::arg("lb"),
             py::arg("ub"), subgraph_edges_doc.AddVelocityBounds.doc)
+        .def("AddZeroDerivativeConstraints",
+            &Class::EdgesBetweenSubgraphs::AddZeroDerivativeConstraints,
+            py::arg("derivative_order"),
+            subgraph_edges_doc.AddZeroDerivativeConstraints.doc)
         .def("AddPathContinuityConstraints",
             &Class::EdgesBetweenSubgraphs::AddPathContinuityConstraints,
             py::arg("continuity_order"),
@@ -438,6 +442,8 @@ void DefinePlanningTrajectoryOptimization(py::module m) {
             py_rvp::reference_internal, py::arg("regions"), py::arg("order"),
             py::arg("h_min") = 1e-6, py::arg("h_max") = 20,
             py::arg("name") = "", cls_doc.AddRegions.doc_5args)
+        .def("RemoveSubgraph", &Class::RemoveSubgraph, py::arg("subgraph"),
+            cls_doc.RemoveSubgraph.doc)
         .def("AddEdges", &Class::AddEdges, py_rvp::reference_internal,
             py::arg("from_subgraph"), py::arg("to_subgraph"),
             py::arg("subspace") = py::none(), cls_doc.AddEdges.doc)
@@ -466,6 +472,10 @@ void DefinePlanningTrajectoryOptimization(py::module m) {
             py::arg("options") =
                 geometry::optimization::GraphOfConvexSetsOptions(),
             cls_doc.SolveConvexRestriction.doc)
+        .def("GetSubgraphs", &Class::GetSubgraphs, py_rvp::reference_internal,
+            cls_doc.GetSubgraphs.doc)
+        .def("GetEdgesBetweenSubgraphs", &Class::GetEdgesBetweenSubgraphs,
+            py_rvp::reference_internal, cls_doc.GetEdgesBetweenSubgraphs.doc)
         .def("graph_of_convex_sets", &Class::graph_of_convex_sets,
             py_rvp::reference_internal, cls_doc.graph_of_convex_sets.doc)
         .def_static("NormalizeSegmentTimes", &Class::NormalizeSegmentTimes,

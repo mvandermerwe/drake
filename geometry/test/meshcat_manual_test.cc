@@ -46,15 +46,19 @@ const char* ltrim(const char* message) {
 int do_main() {
   auto meshcat = std::make_shared<Meshcat>();
 
-  // For every two items we add to the initial array, decrement start_x by one
+  // For every items we add to the initial array, decrement start_x by one half
   // to keep things centered.
   // Use ++x as the x-position of new items.
-  const double start_x = -8;
+  const double start_x = -8.5;
   double x = start_x;
 
   Vector3d sphere_home{++x, 0, 0};
   meshcat->SetObject("sphere", Sphere(0.25), Rgba(1.0, 0, 0, 1));
   meshcat->SetTransform("sphere", RigidTransformd(sphere_home));
+  // Note: this isn't the preferred means for setting opacity, but it is the
+  // simplest way to exercise chained property names.
+  meshcat->SetProperty("sphere/<object>", "material.opacity", 0.5);
+  meshcat->SetProperty("sphere/<object>", "material.transparent", true);
 
   meshcat->SetObject("cylinder", Cylinder(0.25, 0.5), Rgba(0.0, 1.0, 0, 1));
   meshcat->SetTransform("cylinder", RigidTransformd(Vector3d{++x, 0, 0}));
@@ -69,6 +73,16 @@ int do_main() {
   Vector3d box_home{++x, 0, 0};
   meshcat->SetObject("box", Box(0.25, 0.25, 0.5), Rgba(0, 0, 1, 1));
   meshcat->SetTransform("box", RigidTransformd(box_home));
+
+  const std::string polytope_with_hole = FindResourceOrThrow(
+      "drake/examples/scene_graph/cuboctahedron_with_hole.obj");
+  meshcat->SetObject("obj_as_convex", Convex(polytope_with_hole, 0.25),
+                     Rgba(0.8, 0.4, 0.1, 1.0));
+  meshcat->SetTransform("obj_as_convex", RigidTransformd(Vector3d{++x, 0, 0}));
+
+  meshcat->SetObject("obj_as_mesh", Mesh(polytope_with_hole, 0.25),
+                     Rgba(0.8, 0.4, 0.1, 1.0));
+  meshcat->SetTransform("obj_as_mesh", RigidTransformd(Vector3d{x, 1, 0}));
 
   meshcat->SetObject("capsule", Capsule(0.25, 0.5), Rgba(0, 1, 1, 1));
   meshcat->SetTransform("capsule", RigidTransformd(Vector3d{++x, 0, 0}));
@@ -232,10 +246,13 @@ Ignore those for now; we'll need to circle back and fix them later.
   std::cout << ltrim(R"""(
 - The background should be grey.
 - From left to right along the x axis, you should see:
-  - a red sphere
+  - a slightly transparent red sphere
   - a green cylinder (with the long axis in z)
   - a pink semi-transparent ellipsoid (long axis in z)
   - a blue box (long axis in z)
+  - an orange polytopes (with a similary shaped textured polytope behind it).
+    The textured shape has a hole through. The orange polytope is its convex
+    hull.
   - a teal capsule (long axis in z)
   - a red cone (expanding in +z, twice as wide in y than in x)
   - a shiny, green, dented cube (created with a PBR material)
@@ -343,14 +360,16 @@ Ignore those for now; we'll need to circle back and fix them later.
   std::cout << "- An environment map has been loaded from a png -- the Cornell "
             << "box.\n"
             << "  The dented green box should reflect it (the camera has moved "
-               "to focus on the box).\n";
+            << "to focus on the box). This may not be apparent until after you "
+            << "move the mouse.\n";
   MaybePauseForUser();
 
   meshcat->SetEnvironmentMap(
       FindResourceOrThrow("drake/geometry/test/env_256_brick_room.jpg"));
 
   std::cout << "- The Cornell box has been replaced by a room with brick walls "
-            << "loaded from a jpg.\n";
+            << "loaded from a jpg. Again, the change may not be apparent "
+            << "until after you move the mouse.\n";
   MaybePauseForUser();
 
   std::cout << ltrim(R"""(
@@ -421,9 +440,9 @@ Ignore those for now; we'll need to circle back and fix them later.
     auto [plant, scene_graph] =
         multibody::AddMultibodyPlantSceneGraph(&builder, 0.001);
     multibody::Parser parser(&plant);
-    parser.AddModels(
-        FindResourceOrThrow("drake/manipulation/models/iiwa_description/urdf/"
-                            "iiwa14_spheres_collision.urdf"));
+    parser.AddModelsFromUrl(
+        "package://drake_models/iiwa_description/urdf/"
+        "iiwa14_spheres_collision.urdf");
     plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("base"));
     parser.AddModels(FindResourceOrThrow(
         "drake/examples/kuka_iiwa_arm/models/table/"
@@ -431,6 +450,11 @@ Ignore those for now; we'll need to circle back and fix them later.
     const double table_height = 0.7645;
     plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("link"),
                      RigidTransformd(Vector3d{0, 0, -table_height - 0.01}));
+    parser.AddModelsFromUrl(
+        "package://drake_models/ycb/006_mustard_bottle.sdf");
+    plant.WeldFrames(plant.world_frame(),
+                     plant.GetFrameByName("base_link_mustard"),
+                     RigidTransformd(Vector3d{0, -0.3, 0.01}));
     plant.Finalize();
 
     builder.ExportInput(plant.get_actuation_input_port(), "actuation_input");
@@ -450,7 +474,8 @@ Ignore those for now; we'll need to circle back and fix them later.
 
     diagram->ForcedPublish(*context);
     std::cout
-        << "- Now you should see a kuka model (from MultibodyPlant/SceneGraph)"
+        << "- Now you should see a kuka model (from MultibodyPlant/SceneGraph) "
+           "and a mustard bottle lying on its side, with the label facing up."
         << std::endl;
 
     MaybePauseForUser();
@@ -489,6 +514,7 @@ Ignore those for now; we'll need to circle back and fix them later.
          "- the camera is focused on the contact point between the robot and "
          "table,\n"
          "- the iiwa is visible,\n"
+         "- the mustard bottle visible including its texture (front label),\n"
          "- the animation plays,\n"
          "- the environment map is present, and\n"
          "- the browser Console has no warnings nor errors\n"

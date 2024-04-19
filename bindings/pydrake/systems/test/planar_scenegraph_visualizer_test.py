@@ -10,7 +10,6 @@ from pydrake.math import RigidTransform
 from pydrake.multibody.parsing import Parser
 from pydrake.multibody.plant import (
     AddMultibodyPlantSceneGraph, CoulombFriction)
-from pydrake.multibody.tree import SpatialInertia, UnitInertia
 from pydrake.systems.analysis import Simulator
 from pydrake.systems.framework import DiagramBuilder
 from pydrake.systems.planar_scenegraph_visualizer import (
@@ -56,12 +55,12 @@ class TestPlanarSceneGraphVisualizer(unittest.TestCase):
 
     def test_kuka(self):
         """Kuka IIWA with mesh geometry."""
-        file_name = FindResourceOrThrow(
-            "drake/manipulation/models/iiwa_description/sdf/"
-            "iiwa14_no_collision.sdf")
+        url = (
+            "package://drake_models/iiwa_description/sdf/"
+            + "iiwa14_no_collision.sdf")
         builder = DiagramBuilder()
         kuka, scene_graph = AddMultibodyPlantSceneGraph(builder, 0.0)
-        Parser(plant=kuka).AddModels(file_name)
+        Parser(plant=kuka).AddModels(url=url)
         kuka.Finalize()
 
         # Make sure that the frames to visualize exist.
@@ -105,9 +104,7 @@ class TestPlanarSceneGraphVisualizer(unittest.TestCase):
         box_shape = Box(1., 2., 3.)
         # This rigid body will be added to the world model instance since
         # the model instance is not specified.
-        box_body = mbp.AddRigidBody("box", SpatialInertia(
-            mass=1.0, p_PScm_E=np.array([0., 0., 0.]),
-            G_SP_E=UnitInertia(1.0, 1.0, 1.0)))
+        box_body = mbp.AddRigidBody("box")
         mbp.WeldFrames(world_body.body_frame(), box_body.body_frame(),
                        RigidTransform())
         mbp.RegisterVisualGeometry(
@@ -146,9 +143,7 @@ class TestPlanarSceneGraphVisualizer(unittest.TestCase):
             world_body = mbp.world_body()
 
             mesh_shape = Mesh(filename, scale=scale)
-            mesh_body = mbp.AddRigidBody("mesh", SpatialInertia(
-                mass=1.0, p_PScm_E=np.array([0., 0., 0.]),
-                G_SP_E=UnitInertia(1.0, 1.0, 1.0)))
+            mesh_body = mbp.AddRigidBody("mesh")
             mbp.WeldFrames(world_body.body_frame(), mesh_body.body_frame(),
                            RigidTransform())
             mbp.RegisterVisualGeometry(
@@ -162,11 +157,11 @@ class TestPlanarSceneGraphVisualizer(unittest.TestCase):
         runfiles = bazel_tools.tools.python.runfiles.runfiles.Create()
         mesh_name = runfiles.Rlocation(
             "drake_models/iiwa_description/meshes/iiwa14/visual/"
-            "link_0.obj")
+            "link_0.gltf")
         scene_graph = scene_graph_with_mesh(mesh_name)
         PlanarSceneGraphVisualizer(scene_graph)
 
-        # This should load correctly, too, by substituting the .obj.
+        # This should load correctly, too, by substituting the .gltf.
         mesh_name_wrong_ext = os.path.splitext(mesh_name)[0] + ".STL"
         scene_graph = scene_graph_with_mesh(mesh_name_wrong_ext)
         PlanarSceneGraphVisualizer(scene_graph)

@@ -150,6 +150,15 @@ class MultibodyTreeSystem : public systems::LeafSystem<T> {
         .template Eval<VectorX<T>>(context);
   }
 
+  /* Returns a reference to the up-to-date cache of per-dof joint damping
+  in the given Context, recalculating it first if necessary. */
+  const VectorX<T>& EvalJointDampingCache(
+      const systems::Context<T>& context) const {
+    this->ValidateContext(context);
+    return this->get_cache_entry(cache_indexes_.joint_damping)
+        .template Eval<VectorX<T>>(context);
+  }
+
   /* Returns a reference to the up-to-date cache of composite-body inertias
   in the given Context, recalculating it first if necessary. */
   const std::vector<SpatialInertia<T>>& EvalCompositeBodyInertiaInWorldCache(
@@ -325,16 +334,16 @@ class MultibodyTreeSystem : public systems::LeafSystem<T> {
   }
   //@}
 
-  // TODO(sherm1) Shouldn't require overriding the default method; need
-  // a DoLeafSetDefaultState().
-  void SetDefaultState(const systems::Context<T>& context,
-                       systems::State<T>* state) const override;
-
   // Override of LeafSystem::SetDefaultParameters. For all parameters declared
   // by various MultibodyElement subclasses, sets numeric and abstract
   // parameters to default values stored in their class members.
   void SetDefaultParameters(const systems::Context<T>& context,
                             systems::Parameters<T>* parameters) const final;
+
+  // TODO(sherm1) Shouldn't require overriding the default method; need
+  // a DoLeafSetDefaultState().
+  void SetDefaultState(const systems::Context<T>& context,
+                       systems::State<T>* state) const override;
 
  private:
   // This is only meaningful in continuous mode.
@@ -392,6 +401,11 @@ class MultibodyTreeSystem : public systems::LeafSystem<T> {
   void CalcReflectedInertia(const systems::Context<T>& context,
                             VectorX<T>* reflected_inertia) const {
     internal_tree().CalcReflectedInertia(context, reflected_inertia);
+  }
+
+  void CalcJointDamping(const systems::Context<T>& context,
+                        VectorX<T>* joint_damping) const {
+    internal_tree().CalcJointDamping(context, joint_damping);
   }
 
   void CalcCompositeBodyInertiasInWorld(
@@ -510,6 +524,7 @@ class MultibodyTreeSystem : public systems::LeafSystem<T> {
     systems::CacheIndex spatial_acceleration_bias;
     systems::CacheIndex velocity_kinematics;
     systems::CacheIndex reflected_inertia;
+    systems::CacheIndex joint_damping;
   };
 
   // This is the one real constructor. From the public API, a null tree is

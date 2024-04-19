@@ -665,6 +665,74 @@ TEST_F(RenderEngineVtkTest, GltfTextureSupport) {
   EXPECT_GE(num_acceptable / static_cast<float>(expected_image.size()), 0.8);
 }
 
+// A glTF file can either embed its assets as data URIs, or can use relative
+// pathnames for the URI. It can use buffer views into a single asset buffer,
+// or have assets in different files. We'll render a simple cube loaded from
+// multiple different asset formats, and confirm that it looks the same in all
+// cases. This test doesn't confirm that VTK does the _right_ thing with glTF
+// files (for that, see WholeImageCustomParams), just that it treats the glTF
+// asset formats uniformly.
+TEST_F(RenderEngineVtkTest, GltfAssetFormats) {
+  constexpr int kCount = 3;
+  const std::array<std::string, kCount> filenames{
+      FindResourceOrThrow("drake/geometry/render/test/meshes/cube1.gltf"),
+      FindResourceOrThrow("drake/geometry/render/test/meshes/cube2.gltf"),
+      FindResourceOrThrow("drake/geometry/render/test/meshes/cube3.gltf")};
+
+  Init(X_WC_, true);
+
+  std::array<ImageRgba8U, kCount> images;
+  for (int i = 0; i < ssize(filenames); ++i) {
+    // Add the i'th cube to the scene.
+    const GeometryId id = GeometryId::get_new_id();
+    renderer_->RegisterVisual(id, Mesh(filenames[i]), PerceptionProperties{},
+                              RigidTransformd::Identity(), true);
+    renderer_->UpdatePoses(unordered_map<GeometryId, RigidTransformd>{
+        {id, RigidTransformd::Identity()}});
+
+    // Render an image of it.
+    images[i].resize(kWidth, kHeight);
+    Render(nullptr, nullptr, &images[i], nullptr, nullptr);
+
+    // Compare against the prior image.
+    if (i > 0) {
+      EXPECT_TRUE(images[i - i] == images[i]) << fmt::format(
+          "The gltf_asset_formats_{}.png and gltf_asset_formats_{}.png should "
+          "have been identical, but were not! Check the bazel-testlogs for "
+          "the saved images",
+          i - 1, i);
+    }
+
+    // Reset for the next cube.
+    renderer_->RemoveGeometry(id);
+  }
+
+  // Save the images for offline inspection.
+  if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+    const std::filesystem::path out_dir(dir);
+    for (int i = 0; i < ssize(images); ++i) {
+      ImageIo{}.Save(images[i],
+                     out_dir / fmt::format("gltf_asset_formats_{}.png", i));
+    }
+  }
+}
+
+TEST_F(RenderEngineVtkTest, GltfUnsupportedExtensionRequired) {
+  const RigidTransformd X_WC;
+  Init(X_WC);
+
+  PerceptionProperties material;
+  material.AddProperty("label", "id", RenderLabel(1));
+  const GeometryId id = GeometryId::get_new_id();
+  const std::string filename = FindResourceOrThrow(
+      "drake/geometry/render/test/meshes/basisu_required.gltf");
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      renderer_->RegisterVisual(id, Mesh(filename), material,
+                                RigidTransformd::Identity(),
+                                false /* needs update */),
+      ".*KHR_texture_basisu is required.*");
+}
+
 // Primitives result in a geometry with a single Part. However, we can load
 // meshes from .gltf or .obj files that will create multiple parts. The meshes
 // in this test are conceptually identical: a cube with different colors on each
@@ -825,20 +893,15 @@ TEST_F(RenderEngineVtkTest, VtkGltfBehavior) {
   }
 }
 
-// Confirms that meshes/convex referencing a file with an unsupported extension
-// are ignored. (There's also an untested one-time warning.)
-TEST_F(RenderEngineVtkTest, UnsupportedMeshConvex) {
+// Confirms that Mesh declarations referencing a file with an unsupported
+// extension are ignored. (There's also an untested one-time warning.)
+TEST_F(RenderEngineVtkTest, UnsupportedMesh) {
   Init(X_WC_, false);
   const PerceptionProperties material = simple_material();
   const GeometryId id = GeometryId::get_new_id();
 
   const Mesh mesh("invalid.fbx");
   EXPECT_FALSE(renderer_->RegisterVisual(id, mesh, material,
-                                         RigidTransformd::Identity(),
-                                         false /* needs update */));
-
-  const Convex convex("invalid.fbx");
-  EXPECT_FALSE(renderer_->RegisterVisual(id, convex, material,
                                          RigidTransformd::Identity(),
                                          false /* needs update */));
 }
@@ -2155,11 +2218,12 @@ double AddShapeRows(RenderEngineVtk* render_engine,
   register_visual(GeometryId::get_new_id(), capsule, texture_material(),
                   Vector3d{x, row2, 0});
 
-  // Convex is treated the same as Mesh. We'll put a token convex shape in, but
-  // do the rigorous testing on Mesh below.
+  // A non-convex shape should be replaced by its convex hull. It doesn't take
+  // a texture, so we don't need a texture variant.
   x -= 0.15;
   const Convex convex(
-      FindResourceOrThrow("drake/geometry/render/test/meshes/box_no_mtl.obj"),
+      FindResourceOrThrow(
+          "drake/examples/scene_graph/cuboctahedron_with_hole.obj"),
       0.05);
   register_visual(GeometryId::get_new_id(), convex,
                   diffuse_material(Rgba(0.8, 0.25, 0.8)), Vector3d{x, row1, 0});

@@ -7,6 +7,7 @@ import matplotlib
 import matplotlib.cm as plt_cm
 import numpy as np
 import os
+from pathlib import Path
 
 from pydrake.common.deprecation import _warn_deprecated
 from pydrake.common.value import Value
@@ -17,7 +18,6 @@ from pydrake.geometry import (
     HalfSpace,
     Mesh,
     QueryObject,
-    ReadObjToTriangleSurfaceMesh,
     Rgba,
     Role,
     Sphere,
@@ -96,9 +96,8 @@ class PlanarSceneGraphVisualizer(PyPlotVisualizer):
                 will be the same color.)
             substitute_collocated_mesh_files: If True, then a mesh file
                 specified with an unsupported filename extension may be
-                replaced by a file of the same base name in the same directory,
-                but with a supported filename extension.  Currently only .obj
-                files are supported.
+                replaced by a file of the same base name in the same
+                directory, but with a supported filename extension.
             ax: If supplied, the visualizer will draw onto those axes instead
                 of creating a new set of axes. The visualizer will still change
                 the view range and figure size of those axes.
@@ -244,34 +243,34 @@ class PlanarSceneGraphVisualizer(PyPlotVisualizer):
                          for pt in sample_pts])
 
                 elif isinstance(shape, (Mesh, Convex)):
-                    filename = shape.filename()
-                    base, ext = os.path.splitext(filename)
-                    if (ext.lower() != ".obj"
+                    # Legacy behavior for looking for a .obj when the extension
+                    # is not recognized.
+                    filename = Path(shape.filename())
+                    known_suffixes = [".obj", ".vtk", ".gltf"]
+                    if (filename.suffix.lower() not in known_suffixes
                             and substitute_collocated_mesh_files):
-                        # Check for a co-located .obj file (case insensitive).
-                        for f in glob.glob(base + '.*'):
-                            if f[-4:].lower() == '.obj':
-                                filename = f
+                        # Check for a co-located fallback (case insensitive).
+                        for new_suffix in known_suffixes:
+                            new_filename = filename.with_suffix(new_suffix)
+                            if new_filename.exists():
+                                filename = new_filename
                                 break
-                        if filename[-4:].lower() != '.obj':
+                        else:
                             raise RuntimeError(
-                                f"The given file {filename} is not "
-                                f"supported and no alternate {base}"
-                                ".obj could be found.")
-                    if not os.path.exists(filename):
+                                f"The mesh {filename} is not a supported "
+                                f"format and no collocated fallback was found")
+                    if not filename.exists():
                         raise FileNotFoundError(errno.ENOENT, os.strerror(
                             errno.ENOENT), filename)
-                    # Get mesh scaling.
-                    scale = shape.scale()
-                    mesh = ReadObjToTriangleSurfaceMesh(filename, scale)
-                    patch_G = np.vstack(mesh.vertices())
-
-                    # Only store the vertices of the (3D) convex hull of the
-                    # mesh, as any interior vertices will still be interior
-                    # vertices after projection, and will therefore be removed
-                    # in _update_body_fill_verts().
-                    vpoly = optimization.VPolytope(patch_G.T)
-                    patch_G = vpoly.GetMinimalRepresentation().vertices()
+                    if filename == shape.filename():
+                        # It may have already been computed elsewhere.
+                        convex_hull = shape.GetConvexHull()
+                    else:
+                        temp_mesh = Mesh(str(filename), shape.scale())
+                        convex_hull = temp_mesh.GetConvexHull()
+                    patch_G = np.empty((3, convex_hull.num_vertices()))
+                    for i in range(convex_hull.num_vertices()):
+                        patch_G[:, i] = convex_hull.vertex(i)
 
                 elif isinstance(shape, HalfSpace):
                     # For a half space, we'll simply create a large box with

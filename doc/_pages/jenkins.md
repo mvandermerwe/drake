@@ -53,7 +53,7 @@ where ``<job-name>`` is the name of an
 
 For example:
 
-* ``@drake-jenkins-bot mac-x86-monterey-clang-bazel-experimental-release please.``
+* ``@drake-jenkins-bot mac-arm-ventura-clang-bazel-experimental-release please``
 * ``@drake-jenkins-bot linux-jammy-clang-bazel-experimental-valgrind-memcheck please``
 
 A list of Jenkins bot commands that cover the full set of continuous, nightly
@@ -112,7 +112,7 @@ most likely fail. To test new prerequisites, you should first request
 unprovisioned experimental builds, e.g.:
 
 * ``@drake-jenkins-bot linux-jammy-unprovisioned-gcc-bazel-experimental-release please``
-* ``@drake-jenkins-bot mac-x86-monterey-unprovisioned-clang-bazel-experimental-release please.``
+* ``@drake-jenkins-bot mac-arm-ventura-unprovisioned-clang-bazel-experimental-release please``
 
 After this has passed, go through normal review. Once normal review is done,
 add `@BetsyMcPhail` for review and request that the provisioned instances be
@@ -128,7 +128,6 @@ more of these commands:
 
 * ``@drake-jenkins-bot linux-jammy-unprovisioned-gcc-bazel-experimental-packaging please``
 * ``@drake-jenkins-bot mac-arm-ventura-unprovisioned-clang-bazel-experimental-packaging please``
-* ``@drake-jenkins-bot mac-x86-monterey-unprovisioned-clang-bazel-experimental-packaging please``
 
 or follow the [instructions above](#scheduling-builds-via-the-jenkins-user-interface)
 to schedule a build of one of the [Packaging](https://drake-jenkins.csail.mit.edu/view/Packaging/)
@@ -151,7 +150,7 @@ build (click on "Console Output" then "Full Log") and search for the text
 To schedule an "experimental" build of a [wheel package](/pip.html),
 comment on an open pull request using one or more of these commands:
 
-* ``@drake-jenkins-bot linux-focal-unprovisioned-gcc-wheel-experimental-release please``
+* ``@drake-jenkins-bot linux-jammy-unprovisioned-gcc-wheel-experimental-release please``
 * ``@drake-jenkins-bot mac-arm-ventura-unprovisioned-clang-wheel-experimental-release please``
 * ``@drake-jenkins-bot mac-x86-monterey-unprovisioned-clang-wheel-experimental-release please``
 

@@ -63,11 +63,6 @@ from pydrake.multibody.tree import (
     world_index,
     world_model_instance,
 )
-# Deprecated, remove 2024-04-01. Just making sure these exist.
-from pydrake.multibody.tree import (
-    BodyFrame,
-    BodyFrame_,
-)
 from pydrake.multibody.math import (
     SpatialForce_,
     SpatialMomentum_,
@@ -201,7 +196,7 @@ class TestPlant(unittest.TestCase):
         builder = DiagramBuilder()
         plant, scene_graph = AddMultibodyPlantSceneGraph(builder, 0.0)
         self.assertEqual(plant.time_step(), 0.0)
-        spatial_inertia = SpatialInertia()
+        spatial_inertia = SpatialInertia.NaN()
         body = plant.AddRigidBody(name="new_body",
                                   M_BBo_B=spatial_inertia)
         body_mass = body.default_mass()
@@ -265,6 +260,35 @@ class TestPlant(unittest.TestCase):
         context = diagram.CreateDefaultContext()
         with self.assertRaises(RuntimeError):
             plant.EvalBodyPoseInWorld(context, body)
+
+    @numpy_compare.check_all_types
+    def test_joint_actuator_remodeling(self, T):
+        """
+        Tests joint actuator APIs related to remodeling: `RemoveJointActuator`,
+        `has_joint_actuator` and the 0 argument `GetJointActuatorIndices()`.
+        """
+        plant = MultibodyPlant_[T](0)
+        instance = plant.AddModelInstance("instance")
+        body = plant.AddRigidBody(
+            name="body", model_instance=instance)
+        joint = plant.AddJoint(
+            PrismaticJoint_[T](
+                "joint",
+                plant.world_frame(),
+                body.body_frame(),
+                [0, 0, 1]))
+        actuator = plant.AddJointActuator("actuator", joint, 1)
+        actuator_index = actuator.index()
+        self.assertEqual(
+            plant.GetJointActuatorIndices(), [actuator.index()])
+        self.assertTrue(
+            plant.has_joint_actuator(actuator_index=actuator_index))
+        plant.RemoveJointActuator(actuator=actuator)
+        self.assertFalse(
+            plant.has_joint_actuator(actuator_index=actuator_index))
+        plant.Finalize()
+        self.assertEqual(
+            plant.GetJointActuatorIndices(model_instance=instance), [])
 
     def test_multibody_plant_config(self):
         MultibodyPlantConfig()
@@ -786,7 +810,10 @@ class TestPlant(unittest.TestCase):
         SpatialForce = SpatialForce_[T]
         SpatialVelocity = SpatialVelocity_[T]
         SpatialMomentum = SpatialMomentum_[T]
-        SpatialInertia()
+        SpatialInertia.Zero()
+        SpatialInertia.NaN()
+        with catch_drake_warnings(expected_count=1) as w:
+            SpatialInertia()
         SpatialInertia.MakeFromCentralInertia(
             mass=1.3, p_PScm_E=[0.1, -0.2, 0.3],
             I_SScm_E=RotationalInertia(Ixx=2.0, Iyy=2.3, Izz=2.4))
@@ -838,6 +865,10 @@ class TestPlant(unittest.TestCase):
         # work.
         if T != Expression:
             self.assertTrue(spatial_inertia.IsPhysicallyValid())
+        (semi_diameters, transform) = spatial_inertia \
+            .CalcPrincipalSemiDiametersAndPoseForSolidEllipsoid()
+        self.assertIsInstance(semi_diameters, np.ndarray)
+        self.assertIsInstance(transform, RigidTransform)
         self.assertIsInstance(spatial_inertia.CopyToFullMatrix6(), np.ndarray)
         self.assertIsInstance(
             spatial_inertia.ReExpress(R_AE=RotationMatrix()), SpatialInertia)
@@ -893,8 +924,10 @@ class TestPlant(unittest.TestCase):
     @numpy_compare.check_all_types
     def test_rigid_body_api(self, T):
         TemplatedRigidBody = RigidBody_[T]
-        M = SpatialInertia_[float]()
+        M = SpatialInertia_[float].NaN()
         i = ModelInstanceIndex(0)
+        TemplatedRigidBody(body_name="body_name")
+        TemplatedRigidBody(body_name="body_name", model_instance=i)
         TemplatedRigidBody(body_name="body_name", M_BBo_B=M)
         TemplatedRigidBody(body_name="body_name", model_instance=i, M_BBo_B=M)
         # Make sure the default (float) version also works.
@@ -1216,6 +1249,21 @@ class TestPlant(unittest.TestCase):
             X_WB.GetAsMatrix4(),
             numpy_compare.to_float(X_WB_desired.GetAsMatrix4()))
 
+        # Compute spatial accelerations for base.
+        if T == Expression and plant.time_step() != 0:
+            # N.B. Discrete time dynamics are not supported for symbolic
+            # scalars.
+            with self.assertRaises(ValueError) as cm:
+                A_base = plant.EvalBodySpatialAccelerationInWorld(
+                    context, base)
+            self.assertIn(
+                "This method doesn't support T = drake::symbolic::Expression",
+                str(cm.exception))
+        else:
+            A_base = plant.EvalBodySpatialAccelerationInWorld(context, base)
+            self.assert_sane(A_base.rotational(), nonzero=False)
+            self.assert_sane(A_base.translational(), nonzero=False)
+
         # Set a spatial velocity for the base.
         v_WB = SpatialVelocity(w=[1, 2, 3], v=[4, 5, 6])
         plant.SetFreeBodySpatialVelocity(
@@ -1359,7 +1407,7 @@ class TestPlant(unittest.TestCase):
     @numpy_compare.check_all_types
     def test_default_free_body_pose(self, T):
         plant = MultibodyPlant_[T](0.0)
-        body = plant.AddRigidBody("body", SpatialInertia_[float]())
+        body = plant.AddRigidBody("body")
         plant.Finalize()
         # Test existence of default free body pose setting.
         X_WB_default = RigidTransform_[float]()
@@ -1379,18 +1427,18 @@ class TestPlant(unittest.TestCase):
         # Create a MultibodyPlant with a kuka arm and a schunk gripper.
         # the arm is welded to the world, the gripper is welded to the
         # arm's end effector.
-        wsg50_sdf_path = FindResourceOrThrow(
-            "drake/manipulation/models/"
+        wsg50_sdf_url = (
+            "package://drake_models/"
             "wsg_50_description/sdf/schunk_wsg_50.sdf")
-        iiwa_sdf_path = FindResourceOrThrow(
-            "drake/manipulation/models/"
+        iiwa_sdf_url = (
+            "package://drake_models/"
             "iiwa_description/sdf/iiwa14_no_collision.sdf")
 
         # N.B. `Parser` only supports `MultibodyPlant_[float]`.
         plant_f = MultibodyPlant_[float](time_step=2e-3)
         parser = Parser(plant_f)
-        iiwa_model, = parser.AddModels(file_name=iiwa_sdf_path)
-        gripper_model, = parser.AddModels(file_name=wsg50_sdf_path)
+        iiwa_model, = parser.AddModels(url=iiwa_sdf_url)
+        gripper_model, = parser.AddModels(url=wsg50_sdf_url)
         plant_f.Finalize()
         plant = to_type(plant_f, T)
         models = [iiwa_model, gripper_model]
@@ -1539,19 +1587,19 @@ class TestPlant(unittest.TestCase):
         RigidTransform = RigidTransform_[T]
         RollPitchYaw = RollPitchYaw_[T]
 
-        wsg50_sdf_path = FindResourceOrThrow(
-            "drake/manipulation/models/"
-            "wsg_50_description/sdf/schunk_wsg_50.sdf")
-        iiwa_sdf_path = FindResourceOrThrow(
-            "drake/manipulation/models/"
-            "iiwa_description/sdf/iiwa14_no_collision.sdf")
+        wsg50_sdf_url = (
+            "package://drake_models/wsg_50_description/sdf/"
+            + "schunk_wsg_50.sdf")
+        iiwa_sdf_url = (
+            "package://drake_models/iiwa_description/sdf/"
+            + "iiwa14_no_collision.sdf")
 
         # N.B. `Parser` only supports `MultibodyPlant_[float]`.
         plant_f = MultibodyPlant_[float](0.0)
         parser = Parser(plant_f)
 
-        iiwa_model, = parser.AddModels(file_name=iiwa_sdf_path)
-        gripper_model, = parser.AddModels(file_name=wsg50_sdf_path)
+        iiwa_model, = parser.AddModels(url=iiwa_sdf_url)
+        gripper_model, = parser.AddModels(url=wsg50_sdf_url)
 
         # Weld the base of arm and gripper to reduce the number of states.
         X_EeGripper = RigidTransform_[float](
@@ -1685,11 +1733,11 @@ class TestPlant(unittest.TestCase):
         # Create a MultibodyPlant with a kuka arm and a schunk gripper.
         # the arm is welded to the world, the gripper is welded to the
         # arm's end effector.
-        wsg50_sdf_path = FindResourceOrThrow(
-            "drake/manipulation/models/"
+        wsg50_sdf_url = (
+            "package://drake_models/"
             "wsg_50_description/sdf/schunk_wsg_50.sdf")
-        iiwa_sdf_path = FindResourceOrThrow(
-            "drake/manipulation/models/"
+        iiwa_sdf_url = (
+            "package://drake_models/"
             "iiwa_description/sdf/iiwa14_no_collision.sdf")
 
         time_step = 0.0002
@@ -1697,8 +1745,8 @@ class TestPlant(unittest.TestCase):
         plant_f = MultibodyPlant_[float](time_step)
         parser = Parser(plant_f)
 
-        iiwa_model, = parser.AddModels(file_name=iiwa_sdf_path)
-        gripper_model, = parser.AddModels(file_name=wsg50_sdf_path)
+        iiwa_model, = parser.AddModels(url=iiwa_sdf_url)
+        gripper_model, = parser.AddModels(url=wsg50_sdf_url)
 
         # Weld the base of arm and gripper to reduce the number of states.
         X_EeGripper = RigidTransform_[float](
@@ -1794,12 +1842,12 @@ class TestPlant(unittest.TestCase):
         RollPitchYaw = RollPitchYaw_[T]
         # N.B. `Parser` only supports `MultibodyPlant_[float]`.
         plant_f = MultibodyPlant_[float](0.0)
-        iiwa_sdf_path = FindResourceOrThrow(
-            "drake/manipulation/models/"
-            "iiwa_description/sdf/iiwa14_no_collision.sdf")
+        iiwa_sdf_url = (
+            "package://drake_models/iiwa_description/sdf/"
+            + "iiwa14_no_collision.sdf")
         # Use floating base to effectively add a quaternion in the generalized
         # quaternion.
-        iiwa_model, = Parser(plant_f).AddModels(iiwa_sdf_path)
+        iiwa_model, = Parser(plant_f).AddModels(url=iiwa_sdf_url)
         plant_f.Finalize()
         plant = to_type(plant_f, T)
         context = plant.CreateDefaultContext()
@@ -1840,6 +1888,7 @@ class TestPlant(unittest.TestCase):
         """
         array_T = np.vectorize(T)
         damping = 2.
+        different_damping = 3.4
         x_axis = [1., 0., 0.]
         X_PC = RigidTransform_[float](p=[1., 2., 3.])
 
@@ -1856,7 +1905,7 @@ class TestPlant(unittest.TestCase):
                 name="planar",
                 frame_on_parent=P,
                 frame_on_child=C,
-                damping=[1., 2., 3.],
+                damping=[damping, damping, damping],
             )
 
         def make_prismatic_joint(plant, P, C):
@@ -1955,7 +2004,7 @@ class TestPlant(unittest.TestCase):
 
         def loop_body(make_joint, time_step):
             plant = MultibodyPlant_[T](time_step)
-            child = plant.AddRigidBody("Child", SpatialInertia_[float]())
+            child = plant.AddRigidBody("Child")
             joint = make_joint(
                 plant=plant, P=plant.world_frame(), C=child.body_frame())
             joint_out = plant.AddJoint(joint)
@@ -1971,9 +2020,35 @@ class TestPlant(unittest.TestCase):
                     "tau", default_model_instance()))
                 self.assertIsInstance(actuator, JointActuator_[T])
 
+            damping_vector = []
+            different_damping_vector = []
+
+            # Calling deprecated Joint.damping_vector() should raise a warning.
+            with catch_drake_warnings(expected_count=1) as w:
+                joint.damping_vector()
+                self.assertIn("2024-06-01", str(w[0].message))
+
+            if joint.name() != "weld":
+                damping_vector = joint.num_velocities() * [damping]
+                different_damping_vector = \
+                    joint.num_velocities() * [different_damping]
+                numpy_compare.assert_equal(
+                    joint.default_damping_vector(), damping_vector)
+                # Test deprecated API still works until removal.
+                with catch_drake_warnings(expected_count=1) as w:
+                    numpy_compare.assert_equal(joint.damping_vector(),
+                                               damping_vector)
+                    self.assertIn("2024-06-01", str(w[0].message))
+                joint.set_default_damping_vector(
+                    damping=different_damping_vector)
+                numpy_compare.assert_equal(
+                    joint.default_damping_vector(), different_damping_vector)
+                joint.set_default_damping_vector(damping=damping_vector)
+
             if joint.name() in ["prismatic", "revolute"]:
                 # This must be called pre-Finalize().
                 joint.set_default_damping(damping=damping)
+                self.assertEqual(joint.default_damping(), damping)
 
             plant.Finalize()
             context = plant.CreateDefaultContext()
@@ -2006,8 +2081,24 @@ class TestPlant(unittest.TestCase):
                 joint.Unlock(context)
                 self.assertFalse(joint.is_locked(context))
 
+            if joint.name() != "weld":
+                numpy_compare.assert_equal(
+                    joint.GetDampingVector(context), array_T(damping_vector))
+                joint.SetDampingVector(context,
+                                       array_T(different_damping_vector))
+                numpy_compare.assert_equal(
+                    joint.GetDampingVector(context),
+                    array_T(different_damping_vector))
+                joint.SetDampingVector(context,
+                                       array_T(damping_vector))
+
             if joint.name() == "ball_rpy":
-                joint.damping()
+                self.assertEqual(joint.default_damping(), damping)
+                # Calling deprecated BallRpyJoint.damping() should raise a
+                # warning.
+                with catch_drake_warnings(expected_count=1) as w:
+                    self.assertEqual(joint.damping(), damping)
+                    self.assertIn("2024-06-01", str(w[0].message))
                 set_point = array_T([1., 2., 3.])
                 joint.set_angles(context=context, angles=set_point)
                 numpy_compare.assert_equal(
@@ -2022,7 +2113,12 @@ class TestPlant(unittest.TestCase):
                 joint.get_default_angles()
                 joint.set_default_angles(angles=[0.0, 0.0, 0.0])
             elif joint.name() == "planar":
-                self.assertEqual(len(joint.damping()), 3)
+                self.assertEqual(len(joint.default_damping()), 3)
+                # Calling deprecated PlanarJoint.damping() should raise a
+                # warning.
+                with catch_drake_warnings(expected_count=1) as w:
+                    self.assertEqual(len(joint.damping()), 3)
+                    self.assertIn("2024-06-01", str(w[0].message))
                 set_translation = array_T([1., 2.])
                 set_angle = T(3.)
                 joint.set_translation(context=context,
@@ -2052,7 +2148,12 @@ class TestPlant(unittest.TestCase):
                 joint.set_default_rotation(theta=0.0)
                 joint.set_default_pose(p_FoMo_F=[0.0, 0.0], theta=0.0)
             elif joint.name() == "prismatic":
-                self.assertEqual(joint.damping(), damping)
+                self.assertEqual(joint.default_damping(), damping)
+                # Calling deprecated PrismaticJoint.damping() should raise a
+                # warning.
+                with catch_drake_warnings(expected_count=1) as w:
+                    self.assertEqual(joint.damping(), damping)
+                    self.assertIn("2024-06-01", str(w[0].message))
                 numpy_compare.assert_equal(joint.translation_axis(), x_axis)
                 set_point = T(1.)
                 joint.set_translation(context=context, translation=set_point)
@@ -2073,9 +2174,23 @@ class TestPlant(unittest.TestCase):
                 joint.acceleration_upper_limit()
                 joint.get_default_translation()
                 joint.set_default_translation(translation=0.0)
+                numpy_compare.assert_equal(
+                    joint.GetDamping(context), T(damping))
+                joint.SetDamping(context, T(different_damping))
+                numpy_compare.assert_equal(
+                    joint.GetDamping(context), T(different_damping))
             elif joint.name() == "quaternion_floating":
-                self.assertEqual(joint.angular_damping(), damping)
-                self.assertEqual(joint.translational_damping(), damping)
+                self.assertEqual(joint.default_angular_damping(), damping)
+                self.assertEqual(joint.default_translational_damping(),
+                                 damping)
+                # Calling deprecated QuaternionFloatingJoint.angular_damping()
+                # and .translational_damping() should raise a warning.
+                with catch_drake_warnings(expected_count=1) as w:
+                    self.assertEqual(joint.angular_damping(), damping)
+                    self.assertIn("2024-06-01", str(w[0].message))
+                with catch_drake_warnings(expected_count=1) as w:
+                    self.assertEqual(joint.translational_damping(), damping)
+                    self.assertIn("2024-06-01", str(w[0].message))
                 joint.get_quaternion(context=context)
                 joint.get_position(context=context)
                 joint.get_pose(context=context)
@@ -2106,7 +2221,12 @@ class TestPlant(unittest.TestCase):
                 joint.GetDefaultPosePair()
             elif joint.name() == "revolute":
                 numpy_compare.assert_equal(joint.revolute_axis(), x_axis)
-                self.assertEqual(joint.damping(), damping)
+                self.assertEqual(joint.default_damping(), damping)
+                # Calling deprecated RevoluteJoint.damping() should raise a
+                # warning.
+                with catch_drake_warnings(expected_count=1) as w:
+                    self.assertEqual(joint.damping(), damping)
+                    self.assertIn("2024-06-01", str(w[0].message))
                 set_point = T(1.)
                 joint.set_angle(context=context, angle=set_point)
                 numpy_compare.assert_equal(
@@ -2131,10 +2251,24 @@ class TestPlant(unittest.TestCase):
                 joint.AddInOneForce(
                     context=context, joint_dof=0, joint_tau=0.0, forces=forces)
                 joint.AddInDamping(context=context, forces=forces)
+                numpy_compare.assert_equal(
+                    joint.GetDamping(context), T(damping))
+                joint.SetDamping(context, T(different_damping))
+                numpy_compare.assert_equal(
+                    joint.GetDamping(context), T(different_damping))
             elif joint.name() == "rpy_floating":
                 self.assertEqual(joint.type_name(), "rpy_floating")
-                self.assertEqual(joint.angular_damping(), damping)
-                self.assertEqual(joint.translational_damping(), damping)
+                self.assertEqual(joint.default_angular_damping(), damping)
+                self.assertEqual(joint.default_translational_damping(),
+                                 damping)
+                # Calling deprecated RpyFloatingJoint.angular_damping()
+                # and .translational_damping() should raise a warning.
+                with catch_drake_warnings(expected_count=1) as w:
+                    self.assertEqual(joint.angular_damping(), damping)
+                    self.assertIn("2024-06-01", str(w[0].message))
+                with catch_drake_warnings(expected_count=1) as w:
+                    self.assertEqual(joint.translational_damping(), damping)
+                    self.assertIn("2024-06-01", str(w[0].message))
                 joint.get_angles(context=context)
                 joint.set_angles(context=context, angles=[0, 0, 0])
                 joint.SetOrientation(context=context,
@@ -2161,8 +2295,12 @@ class TestPlant(unittest.TestCase):
                 joint.GetDefaultPose()
                 joint.GetDefaultPosePair()
             elif joint.name() == "screw":
-                self.assertEqual(joint.damping(), damping)
-                joint.damping()
+                self.assertEqual(joint.default_damping(), damping)
+                # Calling deprecated ScrewJoint.damping() should raise a
+                # warning.
+                with catch_drake_warnings(expected_count=1) as w:
+                    self.assertEqual(joint.damping(), damping)
+                    self.assertIn("2024-06-01", str(w[0].message))
                 joint.screw_pitch()
                 joint.get_default_rotation()
                 joint.set_default_rotation(0.0)
@@ -2177,8 +2315,18 @@ class TestPlant(unittest.TestCase):
                 # Check the Joint base class sugar for 1dof.
                 joint.GetOnePosition(context=context)
                 joint.GetOneVelocity(context=context)
+                numpy_compare.assert_equal(
+                    joint.GetDamping(context), T(damping))
+                joint.SetDamping(context, T(different_damping))
+                numpy_compare.assert_equal(
+                    joint.GetDamping(context), T(different_damping))
             elif joint.name() == "universal":
-                self.assertEqual(joint.damping(), damping)
+                self.assertEqual(joint.default_damping(), damping)
+                # Calling deprecated UniversalJoint.damping() should raise a
+                # warning.
+                with catch_drake_warnings(expected_count=1) as w:
+                    self.assertEqual(joint.damping(), damping)
+                    self.assertIn("2024-06-01", str(w[0].message))
                 set_point = array_T([1., 2.])
                 joint.set_angles(context=context, angles=set_point)
                 numpy_compare.assert_equal(
@@ -2206,13 +2354,13 @@ class TestPlant(unittest.TestCase):
                 loop_body(make_joint, 0.001)
 
     def test_actuation_matrix(self):
-        iiwa_sdf_path = FindResourceOrThrow(
-            "drake/manipulation/models/"
-            "iiwa_description/sdf/iiwa14_no_collision.sdf")
+        iiwa_sdf_url = (
+            "package://drake_models/iiwa_description/sdf/"
+            + "iiwa14_no_collision.sdf")
 
         plant = MultibodyPlant_[float](0.0)
         parser = Parser(plant)
-        iiwa_model, = parser.AddModels(file_name=iiwa_sdf_path)
+        iiwa_model, = parser.AddModels(url=iiwa_sdf_url)
         plant.WeldFrames(
             frame_on_parent_F=plant.world_frame(),
             frame_on_child_M=plant.GetFrameByName("iiwa_link_0", iiwa_model))
@@ -2225,12 +2373,8 @@ class TestPlant(unittest.TestCase):
 
     def test_deprecated_weld_joint_api(self):
         plant = MultibodyPlant_[float](0.01)
-        body1 = plant.AddRigidBody(
-            name="body1",
-            M_BBo_B=SpatialInertia_[float]())
-        body2 = plant.AddRigidBody(
-            name="body2",
-            M_BBo_B=SpatialInertia_[float]())
+        body1 = plant.AddRigidBody(name="body1")
+        body2 = plant.AddRigidBody(name="body2")
 
         # No keywords defaults to the first constructor defined in the binding.
         # No warning.
@@ -2242,12 +2386,8 @@ class TestPlant(unittest.TestCase):
 
     def test_deprecated_weld_frames_api(self):
         plant = MultibodyPlant_[float](0.01)
-        body1 = plant.AddRigidBody(
-            name="body1",
-            M_BBo_B=SpatialInertia_[float]())
-        body2 = plant.AddRigidBody(
-            name="body2",
-            M_BBo_B=SpatialInertia_[float]())
+        body1 = plant.AddRigidBody(name="body1")
+        body2 = plant.AddRigidBody(name="body2")
 
         # No keywords defaults to the first function named `WeldFrames` defined
         # in the binding. No warning.
@@ -2359,7 +2499,7 @@ class TestPlant(unittest.TestCase):
     def test_fixed_offset_frame_api(self, T):
         FixedOffsetFrame = FixedOffsetFrame_[T]
         P = MultibodyPlant_[T](0.0).world_frame()
-        B = RigidBody_[T]("body", SpatialInertia_[float]())
+        B = RigidBody_[T]("body")
         X = RigidTransform_[float].Identity()
         FixedOffsetFrame(name="name", P=P, X_PF=X, model_instance=None)
         FixedOffsetFrame(name="name", bodyB=B, X_BF=X)
@@ -2370,7 +2510,7 @@ class TestPlant(unittest.TestCase):
         plant.set_discrete_contact_approximation(
             DiscreteContactApproximation.kSap)
         Parser(plant).AddModelsFromUrl(
-            "package://drake/manipulation/models/"
+            "package://drake_models/"
             "wsg_50_description/sdf/schunk_wsg_50.sdf")
 
         # Add coupler constraint.
@@ -2392,11 +2532,9 @@ class TestPlant(unittest.TestCase):
         plant.set_discrete_contact_approximation(
             DiscreteContactApproximation.kSap)
 
-        # Add a distance constraint. Since we won't be performing dynamics
-        # computations, using garbage inertia is ok for this test.
-        M_BBo_B = SpatialInertia_[float]()
-        body_A = plant.AddRigidBody(name="A", M_BBo_B=M_BBo_B)
-        body_B = plant.AddRigidBody(name="B", M_BBo_B=M_BBo_B)
+        # Add a distance constraint.
+        body_A = plant.AddRigidBody(name="A")
+        body_B = plant.AddRigidBody(name="B")
         p_AP = [0.0, 0.0, 0.0]
         p_BQ = [0.0, 0.0, 0.0]
         plant.AddDistanceConstraint(
@@ -2414,11 +2552,9 @@ class TestPlant(unittest.TestCase):
         plant.set_discrete_contact_approximation(
             DiscreteContactApproximation.kSap)
 
-        # Add ball constraint. Since we won't be performing dynamics
-        # computations, using garbage inertia is ok for this test.
-        M_BBo_B = SpatialInertia_[float]()
-        body_A = plant.AddRigidBody(name="A", M_BBo_B=M_BBo_B)
-        body_B = plant.AddRigidBody(name="B", M_BBo_B=M_BBo_B)
+        # Add ball constraint.
+        body_A = plant.AddRigidBody(name="A")
+        body_B = plant.AddRigidBody(name="B")
         p_AP = [0.0, 0.0, 0.0]
         p_BQ = [0.0, 0.0, 0.0]
         plant.AddBallConstraint(
@@ -2435,11 +2571,8 @@ class TestPlant(unittest.TestCase):
         plant.set_discrete_contact_approximation(
             DiscreteContactApproximation.kSap)
 
-        # Since we won't be performing dynamics computations,
-        # using garbage inertia is ok for this test.
-        M_BBo_B = SpatialInertia_[float]()
-        body_A = plant.AddRigidBody(name="A", M_BBo_B=M_BBo_B)
-        body_B = plant.AddRigidBody(name="B", M_BBo_B=M_BBo_B)
+        body_A = plant.AddRigidBody(name="A")
+        body_B = plant.AddRigidBody(name="B")
 
         # Add ball and distance constraints.
         p_AP = [0.0, 0.0, 0.0]
@@ -2454,7 +2587,7 @@ class TestPlant(unittest.TestCase):
             body_A=body_A, X_AP=X_AP, body_B=body_B, X_BQ=X_BQ)
 
         Parser(plant).AddModelsFromUrl(
-            "package://drake/manipulation/models/"
+            "package://drake_models/"
             "wsg_50_description/sdf/schunk_wsg_50.sdf")
 
         # Add coupler constraint.
@@ -2526,11 +2659,9 @@ class TestPlant(unittest.TestCase):
         plant.set_discrete_contact_approximation(
             DiscreteContactApproximation.kSap)
 
-        # Add weld constraint. Since we won't be performing dynamics
-        # computations, using garbage inertia is ok for this test.
-        M = SpatialInertia_[float]()
-        body_A = plant.AddRigidBody(name="A", M_BBo_B=M)
-        body_B = plant.AddRigidBody(name="B", M_BBo_B=M)
+        # Add weld constraint.
+        body_A = plant.AddRigidBody(name="A")
+        body_B = plant.AddRigidBody(name="B")
         X_AP = RigidTransform_[float]()
         X_BQ = RigidTransform_[float]()
         plant.AddWeldConstraint(
@@ -2548,11 +2679,9 @@ class TestPlant(unittest.TestCase):
         plant.set_discrete_contact_approximation(
             DiscreteContactApproximation.kSap)
 
-        # Add weld constraint. Since we won't be performing dynamics
-        # computations, using garbage inertia is ok for this test.
-        M = SpatialInertia_[float]()
-        body_A = plant.AddRigidBody(name="A", M_BBo_B=M)
-        body_B = plant.AddRigidBody(name="B", M_BBo_B=M)
+        # Add weld constraint.
+        body_A = plant.AddRigidBody(name="A")
+        body_B = plant.AddRigidBody(name="B")
         X_AP = RigidTransform_[float]()
         X_BQ = RigidTransform_[float]()
         id = plant.AddWeldConstraint(
@@ -2915,10 +3044,10 @@ class TestPlant(unittest.TestCase):
         # Test SceneGraphInspector
         inspector = query_object.inspector()
 
-        self.assertEqual(inspector.num_geometries(), 2)
+        self.assertEqual(inspector.num_geometries(), 4)
         self.assertEqual(inspector.num_geometries(),
                          len(inspector.GetAllGeometryIds()))
-        for geometry_id in inspector.GetAllGeometryIds():
+        for geometry_id in inspector.GetAllGeometryIds(Role.kProximity):
             frame_id = inspector.GetFrameId(geometry_id)
             self.assertEqual(
                 inspector.GetGeometryIdByName(
@@ -2942,6 +3071,10 @@ class TestPlant(unittest.TestCase):
         self.assertSetEqual(
             bodies,
             {plant.GetBodyByName("body1"), plant.GetBodyByName("body2")})
+
+        id_, = plant.GetVisualGeometriesForBody(
+            body=plant.GetBodyByName("body1"))
+        self.assertIsInstance(id_, GeometryId)
 
         id_, = plant.GetCollisionGeometriesForBody(
             body=plant.GetBodyByName("body1"))
@@ -3080,8 +3213,7 @@ class TestPlant(unittest.TestCase):
         plant = MultibodyPlant_[float](time_step=0.01)
         model_instance = plant.AddModelInstance("new instance")
         added_body = plant.AddRigidBody(
-            name="body", model_instance=model_instance,
-            M_BBo_B=SpatialInertia_[float]())
+            name="body", model_instance=model_instance)
         plant.Finalize()
         self.assertTrue(plant.HasBodyNamed("body", model_instance))
         self.assertTrue(plant.HasUniqueFreeBaseBody(model_instance))

@@ -2,7 +2,6 @@ load("@drake//tools/skylark:cc.bzl", "cc_library")
 load("@drake//tools/workspace/openusd_internal:lock/files.bzl", "FILES")
 
 def pxr_library(
-        name,
         *,
         subdir):
     """Defines a cc_library in the spirit of OpenUSD's pxr_library CMake macro.
@@ -11,10 +10,10 @@ def pxr_library(
     Instead, they are loaded from the `lock/files.bzl` database.
 
     Args:
-        name: Matches the upstream name (the first argument in CMake).
-        subdir: The subdirectory under `OpenUSD/pxr` (e.g. "base/arch").
+        subdir: The subdirectory under `OpenUSD` (e.g. "pxr/base/arch").
     """
     attrs = FILES[subdir]
+    name = attrs["NAME"]
     srcs = [
         subdir + "/" + x + ".cpp"
         for x in attrs["PUBLIC_CLASSES"] + attrs["PRIVATE_CLASSES"]
@@ -39,14 +38,39 @@ def pxr_library(
     ]
     deps = attrs["LIBRARIES"] + [
         ":pxr_h",
+        "@boost_internal//:any",
+        "@boost_internal//:functional",
+        "@boost_internal//:function",
+        "@boost_internal//:intrusive_ptr",
+        "@boost_internal//:mpl",
+        "@boost_internal//:multi_index",
+        "@boost_internal//:noncopyable",
+        "@boost_internal//:none",
+        "@boost_internal//:numeric_conversion",
+        "@boost_internal//:optional",
+        "@boost_internal//:preprocessor",
+        "@boost_internal//:ptr_container",
+        "@boost_internal//:smart_ptr",
+        "@boost_internal//:variant",
+        "@boost_internal//:vmd",
         "@onetbb_internal//:tbb",
-        # TODO(jwnimmer-tri) We also need to list some @boost here.
     ]
+
+    # TODO(jwnimmer-tri) The plugInfo files will need to be pseudo-installed.
+    data = native.glob([subdir + "/plugInfo.json"], allow_empty = True)
+
+    # OpenUSD uses `__attribute__((constructor))` in anger, so we must mark
+    # all of its code as "alwayslink" (aka "whole archive").
+    alwayslink = True
+
     cc_library(
         name = name,
         srcs = srcs,
         hdrs = hdrs,
         defines = defines,
         copts = ["-w"],
+        alwayslink = alwayslink,
+        linkstatic = True,
+        data = data,
         deps = deps,
     )
