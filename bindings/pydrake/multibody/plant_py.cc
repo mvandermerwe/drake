@@ -948,6 +948,9 @@ namespace drake {
             &Class::GetCollisionGeometriesForBody, py::arg("body"),
             py_rvp::reference_internal,
             cls_doc.GetCollisionGeometriesForBody.doc)
+        .def("GetVisualGeometriesForBody", &Class::GetVisualGeometriesForBody, py::arg("body"),
+             py_rvp::reference_internal,
+             cls_doc.GetVisualGeometriesForBody.doc)
         .def("num_collision_geometries", &Class::num_collision_geometries,
             cls_doc.num_collision_geometries.doc)
         .def("CollectRegisteredGeometries", &Class::CollectRegisteredGeometries,
